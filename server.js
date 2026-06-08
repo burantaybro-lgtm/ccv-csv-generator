@@ -22,6 +22,29 @@ const dbx = new Dropbox({
   refreshToken: process.env.DROPBOX_REFRESH_TOKEN
 });
 
+async function getDropboxAccessToken() {
+  const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: process.env.DROPBOX_REFRESH_TOKEN,
+      client_id: process.env.DROPBOX_CLIENT_ID,
+      client_secret: process.env.DROPBOX_CLIENT_SECRET
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error("Dropbox token refresh failed: " + JSON.stringify(data));
+  }
+
+  return data.access_token;
+}
+
 if (!fs.existsSync("uploads")) {
   fs.mkdirSync("uploads");
 }
@@ -598,13 +621,21 @@ const storeUploadFolder = path.join(
         day: "2-digit"
       }).split("/").reverse().join("-");
 
-      if (process.env.DROPBOX_ACCESS_TOKEN) {
-        await dbx.filesUpload({
-          path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
-          contents: fileContent,
-          mode: "add"
-        });
-      }
+if (process.env.DROPBOX_REFRESH_TOKEN) {
+  const accessToken = await getDropboxAccessToken();
+
+  console.log("Dropbox token generated");
+
+  const dbxUpload = new Dropbox({
+    accessToken
+  });
+
+  await dbxUpload.filesUpload({
+    path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
+    contents: fileContent,
+    mode: "add"
+  });
+}
 
       savedFiles.push(newFileName);
     }
