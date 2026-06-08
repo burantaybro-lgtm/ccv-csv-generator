@@ -349,7 +349,7 @@ formData.append("photoType", photoType.value);
     const data = await response.json();
 
     if (data.success) {
-      statusText.textContent = "Saved: " + data.filename;
+      statusText.textContent = "Saved to Dropbox: " + data.dropboxFolder;
 
       photoInput.value = "";
       preview.style.display = "none";

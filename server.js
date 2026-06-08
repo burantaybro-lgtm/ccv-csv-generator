@@ -640,13 +640,14 @@ if (process.env.DROPBOX_REFRESH_TOKEN) {
       savedFiles.push(newFileName);
     }
 
-    res.json({
-      success: true,
-      store: store.name,
-      folder: storeUploadFolder,
-      filename: savedFiles.join(";"),
-      files: savedFiles
-    });
+res.json({
+  success: true,
+  store: store.name,
+  localFolder: storeUploadFolder,
+  dropboxFolder: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}`,
+  filename: savedFiles.join(";"),
+  files: savedFiles
+});
 
   } catch (error) {
     console.error(error);
