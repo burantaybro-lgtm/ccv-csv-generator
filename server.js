@@ -630,11 +630,16 @@ if (process.env.DROPBOX_REFRESH_TOKEN) {
     accessToken
   });
 
-  await dbxUpload.filesUpload({
-    path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
-    contents: fileContent,
-    mode: "add"
-  });
+const dropboxResult = await dbxUpload.filesUpload({
+  path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
+  contents: fileContent,
+  mode: "add"
+});
+
+console.log(
+  "DROPBOX UPLOAD RESULT:",
+  dropboxResult.result.path_display
+);
 
 console.log("Uploaded to Dropbox:", `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`);
 
