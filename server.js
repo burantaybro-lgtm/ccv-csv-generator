@@ -31,6 +31,8 @@ const categories = XLSX.utils.sheet_to_json(sheet);
 
 app.use(cors());
 app.use(express.static("public"));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -40,6 +42,26 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+const stores = {
+  "palmerston-north": {
+    name: "Palmerston North",
+    password: "7605",
+    dropboxFolder: "Palmerston North"
+  },
+
+  "new-plymouth": {
+    name: "New Plymouth",
+    password: "0137",
+    dropboxFolder: "New Plymouth"
+  },
+
+  "wanganui": {
+    name: "Wanganui",
+    password: "9999",
+    dropboxFolder: "Wanganui"
+  }
+};
 
 const csvWriter = createCsvWriter({
   path: "trade-me-auto-listings.csv",
@@ -173,6 +195,37 @@ function getCategoryText() {
     .join("\n");
 }
 
+function getDeliveryPrice(listing) {
+  const text =
+    `${listing.title} ${listing.body}`.toLowerCase();
+
+  if (
+    text.includes("watch") ||
+    text.includes("ring") ||
+    text.includes("necklace")
+  ) {
+    return "Small bag";
+  }
+
+  if (
+    text.includes("console") ||
+    text.includes("drill") ||
+    text.includes("speaker")
+  ) {
+    return "Shipping box";
+  }
+
+  if (
+    text.includes("bike") ||
+text.includes("guitar") ||
+    text.includes("tv")
+  ) {
+    return "";
+  }
+
+  return "";
+}
+
 function applyTradeMeDefaults(listing) {
   listing.sku = listing.sku || "";
   listing.stock_amount = "1";
@@ -210,7 +263,7 @@ function applyTradeMeDefaults(listing) {
   listing.delivery_bookcourier_service_level = "";
   listing.delivery_bookcourier_no_restricted_items = "";
 
-  listing.delivery_price = listing.delivery_price || "";
+  listing.delivery_price = getDeliveryPrice(listing);
 
   listing.payment_bank_deposit = "TRUE";
   listing.payment_credit_card = "TRUE";
@@ -467,6 +520,21 @@ app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
   try {
     const stockCode = req.body.stockCode;
 
+const photoType = req.body.photoType || "Floorstock";
+const safePhotoType = photoType.replace(/[<>:"/\\|?*]/g, "");
+
+const storeId = req.body.storeId;
+const storePassword = req.body.storePassword;
+
+const store = stores[storeId];
+
+if (!store || store.password !== storePassword) {
+  return res.status(403).json({
+    success: false,
+    error: "Invalid store login"
+  });
+}
+
     if (!stockCode) {
       return res.status(400).json({
         success: false,
@@ -481,6 +549,24 @@ app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
       });
     }
 
+    const dateFolder = new Date().toLocaleDateString("en-NZ", {
+  timeZone: "Pacific/Auckland",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit"
+}).split("/").reverse().join("-");
+
+const storeUploadFolder = path.join(
+  "uploads",
+  storeId,
+  dateFolder,
+  safePhotoType
+);
+
+    if (!fs.existsSync(storeUploadFolder)) {
+      fs.mkdirSync(storeUploadFolder, { recursive: true });
+    }
+
     const savedFiles = [];
 
     for (const file of req.files) {
@@ -492,21 +578,27 @@ app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
       do {
         newFileName = `${stockCode} (${counter})${extension}`;
         counter++;
-      } while (fs.existsSync(path.join("uploads", newFileName)));
+      } while (
+        fs.existsSync(path.join(storeUploadFolder, newFileName))
+      );
 
       const oldPath = file.path;
-      const newPath = path.join("uploads", newFileName);
+      const newPath = path.join(storeUploadFolder, newFileName);
 
       fs.renameSync(oldPath, newPath);
 
       const fileContent = fs.readFileSync(newPath);
 
-      const today = new Date();
-      const dateFolder = today.toISOString().split("T")[0];
+      const dateFolder = new Date().toLocaleDateString("en-NZ", {
+        timeZone: "Pacific/Auckland",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).split("/").reverse().join("-");
 
       if (process.env.DROPBOX_ACCESS_TOKEN) {
         await dbx.filesUpload({
-          path: `/Trademe Uploads/${dateFolder}/${newFileName}`,
+          path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
           contents: fileContent,
           mode: "add"
         });
@@ -517,6 +609,8 @@ app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
 
     res.json({
       success: true,
+      store: store.name,
+      folder: storeUploadFolder,
       filename: savedFiles.join(";"),
       files: savedFiles
     });
@@ -596,6 +690,30 @@ createdListings.push(listing);
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server running at http://localhost:3000");
+app.post("/store-login", (req, res) => {
+  console.log("LOGIN BODY:", req.body);
+
+  const storeId = req.body.storeId;
+  const storePassword = req.body.storePassword;
+
+  const store = stores[storeId];
+
+  if (!store || store.password !== storePassword) {
+    return res.status(403).json({
+      success: false,
+      error: "Invalid store password"
+    });
+  }
+
+  res.json({
+    success: true,
+    storeId,
+    storeName: store.name
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

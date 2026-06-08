@@ -3,7 +3,6 @@
 <head>
   <title>CCV Mobile Stock Photos</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
   <script src="https://unpkg.com/html5-qrcode"></script>
 
   <style>
@@ -43,8 +42,7 @@
       display: block;
     }
 
-    input,
-    button {
+    input, button, select {
       width: 100%;
       padding: 15px;
       margin-top: 10px;
@@ -53,7 +51,7 @@
       border-radius: 12px;
     }
 
-    input {
+    input, select {
       border: 2px solid #ddd;
     }
 
@@ -72,10 +70,6 @@
     #takePhotoBtn {
       background: var(--ccv-yellow);
       color: #222;
-    }
-
-    #uploadBtn {
-      background: var(--ccv-burgundy);
     }
 
     #status {
@@ -103,38 +97,53 @@
       background: black;
     }
 
-    .scan-line {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 3px;
-      background: red;
-      animation: scan 2s linear infinite;
-      z-index: 999;
-      box-shadow: 0 0 10px red;
-    }
-
-    @keyframes scan {
-      0% { top: 0; }
-      50% { top: calc(100% - 3px); }
-      100% { top: 0; }
+    #appScreen {
+      display: none;
     }
   </style>
 </head>
 
 <body>
-  <div class="card">
+
+  <div id="loginScreen" class="card">
+    <h2>Store Login</h2>
+
+    <label>Store</label>
+    <select id="loginStoreId">
+      <option value="palmerston-north">Palmerston North</option>
+      <option value="new-plymouth">New Plymouth</option>
+      <option value="wanganui">Wanganui</option>
+    </select>
+
+    <label>Password</label>
+    <input id="loginPassword" type="password" placeholder="Enter store password">
+
+    <button id="loginBtn" type="button">Login</button>
+
+    <p id="loginStatus"></p>
+  </div>
+
+  <div id="appScreen" class="card">
     <h2>CCV Stock Capture</h2>
 
-    <label>Stock Code</label>
-    <input id="stockCode" placeholder="Example: A18108199-1">
+    <p id="storeDisplay" style="font-weight:bold; text-align:center;"></p>
 
-    <button id="scanBtn" type="button">Scan Stock Code</button>
+    <button id="logoutBtn" type="button">Change Store</button>
 
-    <div id="reader">
-      <div class="scan-line"></div>
-    </div>
+<label>Stock Code</label>
+<input id="stockCode" placeholder="Example: A18108199-1">
+
+<label>Photo Type</label>
+<select id="photoType">
+  <option value="Pulled Pawns">Pulled Pawns</option>
+  <option value="Bought On Hold">Bought On Hold</option>
+  <option value="$1 Reserve">$1 Reserve</option>
+  <option value="Floorstock">Floorstock</option>
+</select>
+
+<button id="scanBtn" type="button">Scan Stock Code</button>
+
+    <div id="reader"></div>
 
     <input
       id="photoInput"
@@ -153,15 +162,87 @@
   </div>
 
 <script>
-let photoCount = 0;
 let scanner = null;
 
+const loginScreen = document.getElementById("loginScreen");
+const appScreen = document.getElementById("appScreen");
+
+const loginStoreId = document.getElementById("loginStoreId");
+const loginPassword = document.getElementById("loginPassword");
+const loginStatus = document.getElementById("loginStatus");
+const storeDisplay = document.getElementById("storeDisplay");
+
 const stockCode = document.getElementById("stockCode");
+const photoType = document.getElementById("photoType");
 const photoInput = document.getElementById("photoInput");
 const preview = document.getElementById("preview");
 const statusText = document.getElementById("status");
 const reader = document.getElementById("reader");
 const takePhotoBtn = document.getElementById("takePhotoBtn");
+
+function showApp() {
+  const storeId = localStorage.getItem("storeId");
+
+  if (storeId) {
+    loginScreen.style.display = "none";
+    appScreen.style.display = "block";
+    storeDisplay.textContent = "Logged in store: " + storeId;
+  } else {
+    loginScreen.style.display = "block";
+    appScreen.style.display = "none";
+  }
+}
+
+document.getElementById("loginBtn").addEventListener("click", async () => {
+
+  loginStatus.textContent = "Logging in...";
+
+  try {
+    const response = await fetch("/store-login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        storeId: loginStoreId.value,
+        storePassword: loginPassword.value.trim()
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      loginStatus.textContent = "Incorrect store password";
+      return;
+    }
+
+    localStorage.setItem("storeId", data.storeId);
+    localStorage.setItem("storePassword", loginPassword.value.trim());
+    localStorage.setItem("storeName", data.storeName);
+
+    loginPassword.value = "";
+    showApp();
+
+  } catch (error) {
+    console.error(error);
+    loginStatus.textContent = "Login failed";
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+
+  localStorage.removeItem("storeId");
+  localStorage.removeItem("storePassword");
+  localStorage.removeItem("storeName");
+
+  loginPassword.value = "";
+  loginStatus.textContent = "";
+
+  loginScreen.style.display = "block";
+  appScreen.style.display = "none";
+});
+
+showApp();
 
 async function stopScanner() {
   if (scanner) {
@@ -200,9 +281,9 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
     statusText.textContent = "Starting scanner...";
 
-    const html5QrCode = new Html5Qrcode("reader");
+    scanner = new Html5Qrcode("reader");
 
-    await html5QrCode.start(
+    await scanner.start(
       { facingMode: "environment" },
       {
         fps: 10,
@@ -212,8 +293,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         stockCode.value = decodedText;
         statusText.textContent = "Scanned: " + decodedText;
 
-        await html5QrCode.stop();
-        reader.style.display = "none";
+        await stopScanner();
       }
     );
 
@@ -225,6 +305,15 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
 document.getElementById("uploadBtn").addEventListener("click", async () => {
   const code = stockCode.value.trim();
+
+  const storeId = localStorage.getItem("storeId");
+  const storePassword = localStorage.getItem("storePassword");
+
+  if (!storeId || !storePassword) {
+    alert("Please login first");
+    showApp();
+    return;
+  }
 
   if (!code) {
     alert("Enter or scan stock code first");
@@ -238,11 +327,16 @@ document.getElementById("uploadBtn").addEventListener("click", async () => {
 
   const formData = new FormData();
 
+alert("Photo type selected: " + photoType.value);
+
   Array.from(photoInput.files).forEach(file => {
     formData.append("photos", file);
   });
 
-  formData.append("stockCode", code);
+formData.append("stockCode", code);
+formData.append("storeId", storeId);
+formData.append("storePassword", storePassword);
+formData.append("photoType", photoType.value);
 
   statusText.textContent = "Uploading photos...";
 
@@ -257,13 +351,13 @@ document.getElementById("uploadBtn").addEventListener("click", async () => {
     if (data.success) {
       statusText.textContent = "Saved: " + data.filename;
 
-      photoCount++;
       photoInput.value = "";
       preview.style.display = "none";
+      stockCode.value = "";
 
       await stopScanner();
     } else {
-      statusText.textContent = "Upload failed";
+      statusText.textContent = data.error || "Upload failed";
     }
 
   } catch (error) {
