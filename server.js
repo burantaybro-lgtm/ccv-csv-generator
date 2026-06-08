@@ -660,7 +660,7 @@ res.json({
   files: savedFiles
 });
 
-  } catch (error) {
+   catch (error) {
     console.error(error);
 
     res.status(500).json({
