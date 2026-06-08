@@ -635,6 +635,9 @@ if (process.env.DROPBOX_REFRESH_TOKEN) {
     contents: fileContent,
     mode: "add"
   });
+
+console.log("Uploaded to Dropbox:", `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`);
+
 }
 
       savedFiles.push(newFileName);
