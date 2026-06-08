@@ -621,54 +621,51 @@ const storeUploadFolder = path.join(
         day: "2-digit"
       }).split("/").reverse().join("-");
 
-if (process.env.DROPBOX_REFRESH_TOKEN) {
-  const accessToken = await getDropboxAccessToken();
+try {
 
-  console.log("Dropbox token generated");
+  if (process.env.DROPBOX_REFRESH_TOKEN) {
 
-  const dbxUpload = new Dropbox({
-    accessToken
+    const accessToken = await getDropboxAccessToken();
+
+    console.log("Dropbox token generated");
+
+    const dbxUpload = new Dropbox({
+      accessToken
+    });
+
+    const dropboxResult = await dbxUpload.filesUpload({
+      path: `Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
+      contents: fileContent,
+      mode: "add"
+    });
+
+    console.log(
+      "DROPBOX UPLOAD RESULT:",
+      dropboxResult.result.path_display
+    );
+
+    console.log(JSON.stringify(dropboxResult, null, 2));
+
+    console.log(
+      "Uploaded to Dropbox:",
+      `Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`
+    );
+  }
+
+  res.json({
+    success: true,
+    filename: savedFiles.join(";")
   });
 
-const dropboxResult = await dbxUpload.filesUpload({
-  path: `Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
-  contents: fileContent,
-  mode: "add"
-});
+} catch (error) {
 
-console.log(
-  "DROPBOX UPLOAD RESULT:",
-  dropboxResult.result.path_display
-);
+  console.error(error);
 
-console.log(JSON.stringify(dropboxResult, null, 2));
+  res.status(500).json({
+    error: "Upload failed"
+  });
 
-console.log(
-  "Uploaded to Dropbox:",
-  `Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`
-);
-
-      savedFiles.push(newFileName);
-    }
-
-res.json({
-  success: true,
-  store: store.name,
-  localFolder: storeUploadFolder,
-  dropboxFolder: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}`,
-  filename: savedFiles.join(";"),
-  files: savedFiles
-});
-
-   catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      error: "Upload failed"
-    });
-  }
-});
+}
 
 app.get("/generate-from-uploads", async (req, res) => {
   try {
