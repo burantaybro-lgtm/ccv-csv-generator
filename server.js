@@ -805,16 +805,6 @@ const stockCode = path
 
       await csvWriter.writeRecords([listing]);
 
-const csvContent = fs.readFileSync("trade-me-auto-listings.csv");
-
-await dbxReady.filesUpload({
-  path: `/Trademe CSV Queue/Processed/CSV/trade-me-auto-listings-${Date.now()}.csv`,
-  contents: csvContent,
-  mode: {
-    ".tag": "overwrite"
-  }
-});
-
       createdListings.push(listing);
 
       for (const file of files) {
@@ -838,6 +828,14 @@ await dbxReady.filesUpload({
         }
       }
     }
+
+const csvContent = fs.readFileSync("trade-me-auto-listings.csv");
+
+await dbxReady.filesUpload({
+  path: `/Trademe CSV Queue/Processed/CSV/trade-me-auto-listings-${Date.now()}.csv`,
+  contents: csvContent,
+  mode: "add"
+});
 
     res.json({
       success: true,
