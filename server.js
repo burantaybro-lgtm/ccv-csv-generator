@@ -750,6 +750,12 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
     const readyFolder = "/Trademe CSV Queue/Ready";
     const processedFolder = "/Trademe CSV Queue/Processed";
 
+const csvPath = "trade-me-auto-listings.csv";
+
+if (fs.existsSync(csvPath)) {
+  fs.unlinkSync(csvPath);
+}
+
     const listResult = await dbxReady.filesListFolder({
       path: readyFolder,
       recursive: true
@@ -829,7 +835,7 @@ const stockCode = path
       }
     }
 
-const csvContent = fs.readFileSync("trade-me-auto-listings.csv");
+const csvContent = fs.readFileSync(csvPath);
 
 await dbxReady.filesUpload({
   path: `/Trademe CSV Queue/Processed/CSV/trade-me-auto-listings-${Date.now()}.csv`,
