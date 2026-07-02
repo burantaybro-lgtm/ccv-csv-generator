@@ -559,6 +559,8 @@ app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
 
 const photoType = req.body.photoType || "Floorstock";
 const safePhotoType = photoType.replace(/[<>:"/\\|?*]/g, "");
+const photoLabel = req.body.photoLabel || "";
+const safePhotoLabel = photoLabel.replace(/[<>:"/\\|?*]/g, "");
 
 const storeId = req.body.storeId;
 const storePassword = req.body.storePassword;
@@ -612,12 +614,20 @@ const storeUploadFolder = path.join(
       let counter = 1;
       let newFileName;
 
-      do {
-        newFileName = `${stockCode} (${counter})${extension}`;
-        counter++;
-      } while (
-        fs.existsSync(path.join(storeUploadFolder, newFileName))
-      );
+do {
+  if (safePhotoLabel) {
+    newFileName =
+      counter === 1
+        ? `${stockCode} ${safePhotoLabel}${extension}`
+        : `${stockCode} ${safePhotoLabel} (${counter})${extension}`;
+  } else {
+    newFileName = `${stockCode} (${counter})${extension}`;
+  }
+
+  counter++;
+} while (
+  fs.existsSync(path.join(storeUploadFolder, newFileName))
+);
 
       const oldPath = file.path;
       const newPath = path.join(storeUploadFolder, newFileName);

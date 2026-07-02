@@ -156,7 +156,11 @@
       style="display:none;"
     >
 
-    <button id="takePhotoBtn" type="button">Take Photos</button>
+<div id="photoButtons">
+  <button type="button" class="photoLabelBtn" data-label="Promo Display">📸 PROMO DISPLAY</button>
+  <button type="button" class="photoLabelBtn" data-label="Accessories">📸 ACCESSORIES</button>
+  <button type="button" class="photoLabelBtn" data-label="Model Sticker">📸 MODEL STICKER</button>
+</div>
     <button id="uploadBtn" type="button">Upload Photos</button>
 
     <p id="status"></p>
@@ -180,7 +184,7 @@ const photoInput = document.getElementById("photoInput");
 const preview = document.getElementById("preview");
 const statusText = document.getElementById("status");
 const reader = document.getElementById("reader");
-const takePhotoBtn = document.getElementById("takePhotoBtn");
+let currentPhotoLabel = "";
 
 function showApp() {
   const storeId = localStorage.getItem("storeId");
@@ -261,9 +265,12 @@ async function stopScanner() {
   reader.style.display = "none";
 }
 
-takePhotoBtn.addEventListener("click", async () => {
-  await stopScanner();
-  photoInput.click();
+document.querySelectorAll(".photoLabelBtn").forEach(button => {
+  button.addEventListener("click", async () => {
+    currentPhotoLabel = button.dataset.label;
+    await stopScanner();
+    photoInput.click();
+  });
 });
 
 photoInput.addEventListener("change", () => {
@@ -339,6 +346,7 @@ formData.append("stockCode", code);
 formData.append("storeId", storeId);
 formData.append("storePassword", storePassword);
 formData.append("photoType", photoType.value);
+formData.append("photoLabel", currentPhotoLabel);
 
   statusText.textContent = "Uploading photos...";
 
