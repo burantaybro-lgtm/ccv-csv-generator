@@ -900,6 +900,13 @@ if (fs.existsSync(csvPath)) {
       recursive: true
     });
 
+console.log("Ready folder:", readyFolder);
+
+console.log(
+  "Raw Dropbox response:",
+  JSON.stringify(listResult.result, null, 2)
+);
+
 console.log(
   "Dropbox entries:",
   listResult.result.entries.map(e => ({
