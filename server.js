@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+// CSV generator only: reads photos, creates AI listings, and writes Trade Me CSV files.
+
 const XLSX = require("xlsx");
 const express = require("express");
 const multer = require("multer");
@@ -16,11 +18,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const dbx = new Dropbox({
-  clientId: process.env.DROPBOX_CLIENT_ID,
-  clientSecret: process.env.DROPBOX_CLIENT_SECRET,
-  refreshToken: process.env.DROPBOX_REFRESH_TOKEN
-});
 
 async function getDropboxAccessToken() {
   const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
@@ -67,38 +64,6 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
-
-const stores = {
-  "palmerston-north": {
-    name: "Palmerston North",
-    password: "7605",
-    dropboxFolder: "Palmerston North"
-  },
-
-  "new-plymouth": {
-    name: "New Plymouth",
-    password: "0137",
-    dropboxFolder: "New Plymouth"
-  },
-
-  "wanganui": {
-    name: "Wanganui",
-    password: "9999",
-    dropboxFolder: "Wanganui"
-  },
-
-  "hamilton-central": {
-    name: "Hamilton Central",
-    password: "6767",
-    dropboxFolder: "Hamilton Central"
-  },
-
-  "hamilton-east": {
-    name: "Hamilton East",
-    password: "2323",
-    dropboxFolder: "Hamilton East"
-  }
-};
 
 const csvWriter = createCsvWriter({
   path: "trade-me-auto-listings.csv",
@@ -674,139 +639,6 @@ const listing = await createListingFromPhotos(stockCode, photoFiles, photoType);
   }
 });
 
-app.post("/mobile-upload", upload.array("photos", 20), async (req, res) => {
-  try {
-    const stockCode = req.body.stockCode;
-
-const photoType = req.body.photoType || "Floorstock";
-const safePhotoType = photoType.replace(/[<>:"/\\|?*]/g, "");
-
-const storeId = req.body.storeId;
-const storePassword = req.body.storePassword;
-
-const store = stores[storeId];
-
-if (!store || store.password !== storePassword) {
-  return res.status(403).json({
-    success: false,
-    error: "Invalid store login"
-  });
-}
-
-    if (!stockCode) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing stock code"
-      });
-    }
-
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "No photos uploaded"
-      });
-    }
-
-    const dateFolder = new Date().toLocaleDateString("en-NZ", {
-  timeZone: "Pacific/Auckland",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit"
-}).split("/").reverse().join("-");
-
-const storeUploadFolder = path.join(
-  "uploads",
-  storeId,
-  dateFolder,
-  safePhotoType
-);
-
-    if (!fs.existsSync(storeUploadFolder)) {
-      fs.mkdirSync(storeUploadFolder, { recursive: true });
-    }
-
-    const savedFiles = [];
-
-    for (const file of req.files) {
-      const extension = path.extname(file.originalname) || ".JPG";
-
-      let counter = 1;
-      let newFileName;
-
-do {
-  newFileName = `${stockCode} (${counter})${extension}`;
-  counter++;
-} while (
-  fs.existsSync(path.join(storeUploadFolder, newFileName))
-);
-
-      const oldPath = file.path;
-      const newPath = path.join(storeUploadFolder, newFileName);
-
-      fs.renameSync(oldPath, newPath);
-
-      const fileContent = fs.readFileSync(newPath);
-
-      const dateFolder = new Date().toLocaleDateString("en-NZ", {
-        timeZone: "Pacific/Auckland",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-      }).split("/").reverse().join("-");
-
-  if (process.env.DROPBOX_REFRESH_TOKEN) {
-
-    const accessToken = await getDropboxAccessToken();
-
-    console.log("Dropbox token generated");
-
-    const dbxUpload = new Dropbox({
-      accessToken
-    });
-
-    const dropboxResult = await dbxUpload.filesUpload({
-      path: `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`,
-      contents: fileContent,
-      mode: "add"
-    });
-
-    console.log(
-      "DROPBOX UPLOAD RESULT:",
-      dropboxResult.result.path_display
-    );
-
-    console.log(JSON.stringify(dropboxResult, null, 2));
-
-    console.log(
-      "Uploaded to Dropbox:",
-      `/Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}/${newFileName}`
-    );
-  }
-
-      savedFiles.push(newFileName);
-    }
-
-    res.json({
-      success: true,
-      store: store.name,
-      localFolder: storeUploadFolder,
-      dropboxFolder: `Trademe Uploads/${store.name}/${dateFolder}/${safePhotoType}`,
-      filename: savedFiles.join(";"),
-      files: savedFiles
-    });
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      error: "Upload failed"
-    });
-
-  }
-});
-
 app.get("/generate-from-uploads", async (req, res) => {
   try {
     const files = fs
@@ -1019,28 +851,6 @@ await dbxReady.filesUpload({
       error: "Failed to generate CSV from Dropbox Ready folder"
     });
   }
-});
-
-app.post("/store-login", (req, res) => {
-  console.log("LOGIN BODY:", req.body);
-
-  const storeId = req.body.storeId;
-  const storePassword = req.body.storePassword;
-
-  const store = stores[storeId];
-
-  if (!store || store.password !== storePassword) {
-    return res.status(403).json({
-      success: false,
-      error: "Invalid store password"
-    });
-  }
-
-  res.json({
-    success: true,
-    storeId,
-    storeName: store.name
-  });
 });
 
 const PORT = process.env.PORT || 3001;
