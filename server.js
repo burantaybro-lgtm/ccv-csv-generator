@@ -11,6 +11,12 @@ const fs = require("fs");
 const OpenAI = require("openai");
 const { Dropbox } = require("dropbox");
 const createCsvWriter = require("csv-writer").createObjectCsvWriter;
+const {
+  createEmptyProductDatabase,
+  getStockCodeFromFilename,
+  mergeProducts,
+  parseBuyReport
+} = require("./stock-data");
 
 const app = express();
 
@@ -65,10 +71,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-const csvWriter = createCsvWriter({
-  path: "trade-me-auto-listings.csv",
-
-  header: [
+const tradeMeCsvHeader = [
     { id: "product_id_for_member", title: "product_id_for_member" },
     { id: "sku", title: "sku" },
     { id: "stock_amount", title: "stock_amount" },
@@ -129,7 +132,11 @@ const csvWriter = createCsvWriter({
     { id: "manufacturer_code", title: "manufacturer_code" },
     { id: "barcode_gtin", title: "barcode_gtin" },
     { id: "update_active_listings", title: "update_active_listings" }
-  ],
+  ];
+
+const csvWriter = createCsvWriter({
+  path: "trade-me-auto-listings.csv",
+  header: tradeMeCsvHeader,
 
   append: fs.existsSync("trade-me-auto-listings.csv")
 });
@@ -403,11 +410,39 @@ function applyListingTemplate(listing, photoType = "") {
   return listing;
 }
 
-async function createListingFromPhotos(stockCode, photoFiles, photoType = "") {
+async function createListingFromPhotos(
+  stockCode,
+  photoFiles,
+  photoType = "",
+  stockRecord = null
+) {
   const photoIdList = photoFiles.join(";");
-  const firstPhotoPath = path.join("uploads", photoFiles[0]);
-  const imageBase64 = fs.readFileSync(firstPhotoPath, "base64");
   const categoryText = getCategoryText();
+
+  const trustedStockText = stockRecord
+    ? `
+TRUSTED STOCK REPORT DATA:
+- Stock code: ${stockRecord.stockCode}
+- Existing product description: ${stockRecord.originalDescription}
+
+Treat the stock report description as authoritative for the product identity,
+brand and model. Use the photos to add visible condition and product details.
+Do not replace a known brand or model with a conflicting visual guess.
+Do not mention the buy number, transaction date, report filename, customer, or
+business purchase amount in the listing.`
+    : "";
+
+  const imageContent = photoFiles.map(photoFile => {
+    const photoPath = path.join("uploads", photoFile);
+    const extension = path.extname(photoFile).toLowerCase();
+    const mimeType = extension === ".png" ? "image/png" : "image/jpeg";
+    const imageBase64 = fs.readFileSync(photoPath, "base64");
+
+    return {
+      type: "input_image",
+      image_url: `data:${mimeType};base64,${imageBase64}`
+    };
+  });
 
   const result = await openai.responses.create({
     model: "gpt-4.1-mini",
@@ -419,9 +454,10 @@ async function createListingFromPhotos(stockCode, photoFiles, photoType = "") {
           {
             type: "input_text",
             text: `
-Look at this item photo and create Trade Me CSV listing data.
+Look at all supplied item photos and create Trade Me CSV listing data.
 
 Photo type: "${photoType}"
+${trustedStockText}
 
 IMPORTANT RULES:
 
@@ -577,10 +613,7 @@ Use this exact JSON structure:
 }
 `
           },
-          {
-            type: "input_image",
-            image_url: `data:image/jpeg;base64,${imageBase64}`
-          }
+          ...imageContent
         ]
       }
     ]
@@ -720,6 +753,94 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
 
     const readyFolder = "/Trademe CSV Queue/Ready";
     const processedFolder = "/Trademe CSV Queue/Processed";
+    const reportsFolder = "/Trademe CSV Queue/Reports";
+    const databasePath = "/Trademe CSV Queue/Database/products.json";
+
+    async function listAllFiles(folder) {
+      let result = await dbxReady.filesListFolder({
+        path: folder,
+        recursive: true
+      });
+      const entries = [...result.result.entries];
+
+      while (result.result.has_more) {
+        result = await dbxReady.filesListFolderContinue({
+          cursor: result.result.cursor
+        });
+        entries.push(...result.result.entries);
+      }
+
+      return entries;
+    }
+
+    async function loadProductDatabase() {
+      try {
+        const download = await dbxReady.filesDownload({ path: databasePath });
+        return JSON.parse(Buffer.from(download.result.fileBinary).toString("utf8"));
+      } catch (error) {
+        const message = String(error?.error?.error_summary || error?.message || error);
+
+        if (message.includes("not_found")) {
+          return createEmptyProductDatabase();
+        }
+
+        throw error;
+      }
+    }
+
+    async function ensureDropboxFolder(folder) {
+      try {
+        await dbxReady.filesCreateFolderV2({ path: folder });
+      } catch (error) {
+        const message = String(error?.error?.error_summary || error?.message || error);
+
+        if (!message.includes("conflict")) {
+          throw error;
+        }
+      }
+    }
+
+    let productDatabase = await loadProductDatabase();
+    const reportWarnings = [];
+    let importedReportCount = 0;
+
+    try {
+      const reportEntries = await listAllFiles(reportsFolder);
+      const reportFiles = reportEntries.filter(entry =>
+        entry[".tag"] === "file" && /\.xlsx?$/i.test(entry.name)
+      );
+
+      for (const reportFile of reportFiles) {
+        const download = await dbxReady.filesDownload({
+          path: reportFile.path_lower
+        });
+        const parsed = parseBuyReport(
+          Buffer.from(download.result.fileBinary),
+          reportFile.name
+        );
+
+        productDatabase = mergeProducts(productDatabase, parsed.products);
+        reportWarnings.push(...parsed.warnings);
+        importedReportCount += 1;
+      }
+    } catch (error) {
+      const message = String(error?.error?.error_summary || error?.message || error);
+
+      if (!message.includes("not_found")) {
+        throw error;
+      }
+
+      reportWarnings.push(`Dropbox Reports folder was not found: ${reportsFolder}`);
+    }
+
+    if (importedReportCount > 0) {
+      await ensureDropboxFolder("/Trademe CSV Queue/Database");
+      await dbxReady.filesUpload({
+        path: databasePath,
+        contents: Buffer.from(JSON.stringify(productDatabase, null, 2)),
+        mode: { ".tag": "overwrite" }
+      });
+    }
 
 const csvPath = "trade-me-auto-listings.csv";
 
@@ -727,28 +848,28 @@ if (fs.existsSync(csvPath)) {
   fs.unlinkSync(csvPath);
 }
 
-    const listResult = await dbxReady.filesListFolder({
-      path: readyFolder,
-      recursive: true
+    // Always create a new writer after clearing the prior run so the CSV
+    // receives its header even when Render has an old file from a past run.
+    const dropboxCsvWriter = createCsvWriter({
+      path: csvPath,
+      header: tradeMeCsvHeader,
+      append: false
     });
+
+    const readyEntries = await listAllFiles(readyFolder);
 
 console.log("Ready folder:", readyFolder);
 
 console.log(
-  "Raw Dropbox response:",
-  JSON.stringify(listResult.result, null, 2)
-);
-
-console.log(
   "Dropbox entries:",
-  listResult.result.entries.map(e => ({
+  readyEntries.map(e => ({
     name: e.name,
     tag: e[".tag"],
     path: e.path_display
   }))
 );
 
-    const imageFiles = listResult.result.entries.filter(entry =>
+    const imageFiles = readyEntries.filter(entry =>
       entry[".tag"] === "file" &&
       /\.(jpg|jpeg|png)$/i.test(entry.name)
     );
@@ -761,12 +882,18 @@ console.log(
     }
 
     const groups = {};
+    const reviewItems = [];
 
     for (const file of imageFiles) {
-const stockCode = path
-  .parse(file.name)
-  .name
-  .replace(/\s*\(\d+\)$/g, "");
+      const stockCode = getStockCodeFromFilename(file.name);
+
+      if (!stockCode) {
+        reviewItems.push({
+          filename: file.name,
+          reason: "No valid B-prefixed stock code found in filename"
+        });
+        continue;
+      }
 
       if (!groups[stockCode]) {
         groups[stockCode] = [];
@@ -780,6 +907,16 @@ const stockCode = path
     for (const stockCode of Object.keys(groups)) {
       const files = groups[stockCode];
       const localFiles = [];
+      const stockRecord = productDatabase.products?.[stockCode];
+
+      if (!stockRecord) {
+        reviewItems.push({
+          stockCode,
+          filenames: files.map(file => file.name),
+          reason: "Stock code not found in imported reports"
+        });
+        continue;
+      }
 
       for (const file of files) {
         const download = await dbxReady.filesDownload({
@@ -799,25 +936,13 @@ const stockCode = path
 const listing = await createListingFromPhotos(
     stockCode,
     localFiles,
-    photoType
+    photoType,
+    stockRecord
 );
 
-      await csvWriter.writeRecords([listing]);
+      await dropboxCsvWriter.writeRecords([listing]);
 
-      createdListings.push(listing);
-
-      for (const file of files) {
-        const processedPath = file.path_display.replace(
-          readyFolder,
-          processedFolder
-        );
-
-        await dbxReady.filesMoveV2({
-          from_path: file.path_display,
-          to_path: processedPath,
-          autorename: true
-        });
-      }
+      createdListings.push({ listing, files });
 
       for (const localFile of localFiles) {
         const localPath = path.join("uploads", localFile);
@@ -828,6 +953,15 @@ const listing = await createListingFromPhotos(
       }
     }
 
+if (createdListings.length === 0) {
+  return res.json({
+    success: false,
+    message: "No listings were created because the photos require review",
+    reportWarnings,
+    reviewItems
+  });
+}
+
 const csvContent = fs.readFileSync(csvPath);
 
 await dbxReady.filesUpload({
@@ -836,11 +970,29 @@ await dbxReady.filesUpload({
   mode: "add"
 });
 
+for (const created of createdListings) {
+  for (const file of created.files) {
+    const processedPath = file.path_display.replace(
+      readyFolder,
+      processedFolder
+    );
+
+    await dbxReady.filesMoveV2({
+      from_path: file.path_display,
+      to_path: processedPath,
+      autorename: true
+    });
+  }
+}
+
     res.json({
       success: true,
       message: "CSV rows created from Dropbox Ready folder",
       count: createdListings.length,
-      listings: createdListings
+      listings: createdListings.map(created => created.listing),
+      importedReportCount,
+      reportWarnings,
+      reviewItems
     });
 
   } catch (error) {
