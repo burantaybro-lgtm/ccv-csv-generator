@@ -24,6 +24,7 @@ const {
 } = require("./stock-data");
 
 const app = express();
+let dropboxGenerationInProgress = false;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -787,6 +788,15 @@ createdListings.push(listing);
 });
 
 app.get("/generate-from-dropbox-ready", async (req, res) => {
+  if (dropboxGenerationInProgress) {
+    return res.status(409).json({
+      success: false,
+      error: "A Dropbox CSV generation run is already in progress"
+    });
+  }
+
+  dropboxGenerationInProgress = true;
+
   try {
     const accessToken = await getDropboxAccessToken();
 
@@ -845,6 +855,7 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
 
     let productDatabase = await loadProductDatabase();
     const reportWarnings = [];
+    const processingWarnings = [];
     let importedReportCount = 0;
 
     try {
@@ -1001,6 +1012,7 @@ if (createdListings.length === 0) {
     success: false,
     message: "No listings were created because the photos require review",
     reportWarnings,
+    processingWarnings,
     reviewItems
   });
 }
@@ -1020,11 +1032,29 @@ for (const created of createdListings) {
       processedFolder
     );
 
-    await dbxReady.filesMoveV2({
-      from_path: file.path_display,
-      to_path: processedPath,
-      autorename: true
-    });
+    try {
+      await dbxReady.filesMoveV2({
+        from_path: file.path_display,
+        to_path: processedPath,
+        autorename: true
+      });
+    } catch (error) {
+      const message = String(
+        error?.error?.error_summary
+        || error?.error?.error?.[".tag"]
+        || error?.message
+        || error
+      );
+
+      if (message.includes("from_lookup/not_found") || message.includes("not_found")) {
+        processingWarnings.push(
+          `${file.name}: source photo was already moved or removed from Ready`
+        );
+        continue;
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -1035,6 +1065,7 @@ for (const created of createdListings) {
       listings: createdListings.map(created => created.listing),
       importedReportCount,
       reportWarnings,
+      processingWarnings,
       reviewItems
     });
 
@@ -1045,6 +1076,8 @@ for (const created of createdListings) {
       success: false,
       error: "Failed to generate CSV from Dropbox Ready folder"
     });
+  } finally {
+    dropboxGenerationInProgress = false;
   }
 });
 
