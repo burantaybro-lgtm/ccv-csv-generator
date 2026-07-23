@@ -12,6 +12,37 @@ function getStockCodeFromFilename(filename) {
   return normaliseStockCode(withoutPhotoNumber);
 }
 
+function buildTradeMeTitle(title, stockCode, maximumLength = 80) {
+  const cleanStockCode = String(stockCode || "").trim().toUpperCase();
+  const stockTag = cleanStockCode ? `#${cleanStockCode}` : "";
+  const escapedTag = stockTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let baseTitle = String(title || "")
+    .replace(new RegExp(`\\s*${escapedTag}`, "ig"), "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!stockTag) {
+    return baseTitle.slice(0, maximumLength).trim();
+  }
+
+  const availableTitleLength = maximumLength - stockTag.length - 1;
+
+  if (availableTitleLength <= 0) {
+    return stockTag.slice(0, maximumLength);
+  }
+
+  if (baseTitle.length > availableTitleLength) {
+    const hardCut = baseTitle.slice(0, availableTitleLength).trim();
+    const lastSpace = hardCut.lastIndexOf(" ");
+
+    baseTitle = lastSpace >= Math.floor(availableTitleLength * 0.6)
+      ? hardCut.slice(0, lastSpace)
+      : hardCut;
+  }
+
+  return `${baseTitle} ${stockTag}`.trim();
+}
+
 function excelDateToIso(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value.toISOString();
@@ -249,6 +280,7 @@ function mergeProducts(database, products) {
 }
 
 module.exports = {
+  buildTradeMeTitle,
   createEmptyProductDatabase,
   getStockCodeFromFilename,
   mergeProducts,

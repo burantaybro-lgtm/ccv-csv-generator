@@ -12,6 +12,7 @@ const OpenAI = require("openai");
 const { Dropbox } = require("dropbox");
 const createCsvWriter = require("csv-writer").createObjectCsvWriter;
 const {
+  buildTradeMeTitle,
   createEmptyProductDatabase,
   getStockCodeFromFilename,
   mergeProducts,
@@ -302,13 +303,11 @@ function applyTradeMeDefaults(listing) {
   listing.barcode_gtin = "";
   listing.update_active_listings = "FALSE";
 
-  if (listing.title && listing.product_id_for_member) {
-    const idTag = `#${listing.product_id_for_member}`;
-
-    if (!listing.title.includes(idTag)) {
-      listing.title = `${listing.title} ${idTag}`;
-    }
-  }
+  listing.title = buildTradeMeTitle(
+    listing.title,
+    listing.product_id_for_member,
+    80
+  );
 
   return listing;
 }
@@ -463,6 +462,7 @@ IMPORTANT RULES:
 
 - Use "${stockCode}" as the product_id_for_member.
 - Use "${photoIdList}" as the photo_id_list.
+- The final title, including the #${stockCode} suffix, must be no more than 80 characters.
 - attributes must always be blank.
 - has_promo must always be "N".
 - fpo_duration must always be "3 days".

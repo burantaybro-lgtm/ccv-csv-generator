@@ -3,12 +3,33 @@ const test = require("node:test");
 const XLSX = require("xlsx");
 
 const {
+  buildTradeMeTitle,
   createEmptyProductDatabase,
   getStockCodeFromFilename,
   mergeProducts,
   parseBuyReport,
   parseStockReport
 } = require("../stock-data");
+
+test("limits Trade Me titles to 80 characters while preserving the stock code", () => {
+  const title = buildTradeMeTitle(
+    "Sony Adaptive Noise Cancelling Wireless Over-Ear Headphones WH1000XM6 Excellent Condition",
+    "A2149497-1"
+  );
+
+  assert.ok(title.length <= 80);
+  assert.match(title, /#A2149497-1$/);
+  assert.equal((title.match(/#A2149497-1/g) || []).length, 1);
+});
+
+test("does not duplicate an existing stock-code title suffix", () => {
+  const title = buildTradeMeTitle(
+    "Canon EOS 700D Digital Camera #B18194032-2",
+    "B18194032-2"
+  );
+
+  assert.equal(title, "Canon EOS 700D Digital Camera #B18194032-2");
+});
 
 test("groups numbered photo filenames under one stock code", () => {
   assert.equal(getStockCodeFromFilename("B18194032-2.jpg"), "B18194032-2");
