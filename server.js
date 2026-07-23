@@ -12,6 +12,10 @@ const OpenAI = require("openai");
 const { Dropbox } = require("dropbox");
 const createCsvWriter = require("csv-writer").createObjectCsvWriter;
 const {
+  findCategoryMatch,
+  loadCategoryRules
+} = require("./category-matcher");
+const {
   buildTradeMeTitle,
   createEmptyProductDatabase,
   getStockCodeFromFilename,
@@ -57,6 +61,15 @@ if (!fs.existsSync("uploads")) {
 const workbook = XLSX.readFile("Trade Me Categories.xlsx");
 const sheet = workbook.Sheets[workbook.SheetNames[0]];
 const categories = XLSX.utils.sheet_to_json(sheet);
+const validCategoryIds = new Set(
+  categories.map(category => String(category["Category Code"] || "").trim())
+);
+const approvedCategoryRules = loadCategoryRules(
+  path.join(__dirname, "Category Rules.xlsx"),
+  validCategoryIds
+);
+
+console.log(`Loaded ${approvedCategoryRules.length} approved category keywords`);
 
 app.use(cors());
 app.use(express.static("public"));
@@ -628,6 +641,36 @@ Use this exact JSON structure:
 
   listing.product_id_for_member = stockCode;
   listing.photo_id_list = photoIdList;
+
+  const reportCategoryMatch = findCategoryMatch(
+    stockRecord?.originalDescription || "",
+    approvedCategoryRules
+  );
+  const analysedCategoryMatch = reportCategoryMatch || findCategoryMatch(
+    [
+      listing.title,
+      listing.body,
+      listing.brand,
+      listing.model,
+      listing.item_type
+    ].filter(Boolean).join(" "),
+    approvedCategoryRules
+  );
+
+  if (analysedCategoryMatch) {
+    listing.category_id = analysedCategoryMatch.categoryId;
+    listing.category_match = {
+      source: reportCategoryMatch ? "stock report keyword" : "AI listing keyword",
+      keyword: analysedCategoryMatch.keyword,
+      categoryPath: analysedCategoryMatch.categoryPath
+    };
+  } else {
+    listing.category_match = {
+      source: "AI fallback",
+      keyword: null,
+      categoryPath: null
+    };
+  }
 
   applyTradeMeDefaults(listing);
 return applyListingTemplate(listing, photoType);
