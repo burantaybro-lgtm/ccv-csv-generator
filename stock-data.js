@@ -2,7 +2,7 @@ const path = require("path");
 const XLSX = require("xlsx");
 
 function normaliseStockCode(value) {
-  const match = String(value || "").trim().match(/\bB\d+-\d+\b/i);
+  const match = String(value || "").trim().match(/\b[AB]\d+-\d+\b/i);
   return match ? match[0].toUpperCase() : null;
 }
 
@@ -78,6 +78,7 @@ function parseBuyReport(fileBuffer, reportFilename) {
 
     products.push({
       stockCode: itemMatch[1].toUpperCase(),
+      stockType: "buy",
       originalDescription: itemMatch[2].trim(),
       buyNumber: currentBuy?.buyNumber || null,
       transactionDate: currentBuy?.transactionDate || null,
@@ -99,6 +100,124 @@ function parseBuyReport(fileBuffer, reportFilename) {
   }
 
   return { products, warnings };
+}
+
+function parseNzReportDate(rows) {
+  for (const row of rows.slice(0, 5)) {
+    const text = String(row[0] || "");
+    const match = text.match(/From\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+
+    if (match) {
+      const [, day, month, year] = match;
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+  }
+
+  return null;
+}
+
+function parseLoanReport(fileBuffer, reportFilename) {
+  const workbook = XLSX.read(fileBuffer, {
+    type: "buffer",
+    cellDates: false
+  });
+  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    defval: null,
+    raw: true
+  });
+
+  const products = [];
+  const warnings = [];
+  const reportDate = parseNzReportDate(rows);
+  let currentLoan = null;
+  let currentProduct = null;
+
+  for (const row of rows) {
+    const firstCell = String(row[0] ?? "").trim();
+
+    if (/^\d{7,}$/.test(firstCell) && row[1]) {
+      currentLoan = {
+        loanNumber: firstCell,
+        transactionDate: excelDateToIso(row[1]),
+        dueDate: excelDateToIso(row[2])
+      };
+      currentProduct = null;
+      continue;
+    }
+
+    const itemMatch = firstCell.match(/^(A\d+-\d+)\s+(.+)$/i);
+
+    if (itemMatch) {
+      currentProduct = {
+        stockCode: itemMatch[1].toUpperCase(),
+        stockType: "loan",
+        originalDescription: itemMatch[2].trim(),
+        loanNumber: currentLoan?.loanNumber || null,
+        transactionDate: currentLoan?.transactionDate || null,
+        dueDate: currentLoan?.dueDate || null,
+        reportDate,
+        sourceReport: reportFilename
+      };
+      products.push(currentProduct);
+      continue;
+    }
+
+    const isContinuation = currentProduct
+      && firstCell
+      && row.slice(1).every(value => value === null)
+      && !/^Pulled Cash Loans$/i.test(firstCell)
+      && !/^From\s+/i.test(firstCell)
+      && !/^CL\s*#/i.test(firstCell)
+      && !/^\d{1,2}\/\d{1,2}\/\d{4}/.test(firstCell);
+
+    if (isContinuation) {
+      currentProduct.originalDescription += ` ${firstCell}`;
+    }
+  }
+
+  if (products.length === 0) {
+    warnings.push(`${reportFilename}: no A-stock loan items were found`);
+  }
+
+  const filenameDate = path.parse(reportFilename).name.match(/^\d{4}-\d{2}-\d{2}$/)?.[0];
+
+  if (filenameDate && reportDate && filenameDate !== reportDate) {
+    warnings.push(
+      `${reportFilename}: filename date ${filenameDate} does not match report date ${reportDate}`
+    );
+  }
+
+  return { products, warnings };
+}
+
+function parseStockReport(fileBuffer, reportFilename) {
+  const workbook = XLSX.read(fileBuffer, {
+    type: "buffer",
+    cellDates: false,
+    sheetRows: 5
+  });
+  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    defval: null,
+    raw: true
+  });
+  const heading = rows.flat().filter(Boolean).join(" ");
+
+  if (/Pulled Cash Loans/i.test(heading)) {
+    return parseLoanReport(fileBuffer, reportFilename);
+  }
+
+  if (/Buys by Date/i.test(heading)) {
+    return parseBuyReport(fileBuffer, reportFilename);
+  }
+
+  return {
+    products: [],
+    warnings: [`${reportFilename}: unsupported report layout`]
+  };
 }
 
 function createEmptyProductDatabase() {
@@ -134,5 +253,7 @@ module.exports = {
   getStockCodeFromFilename,
   mergeProducts,
   normaliseStockCode,
-  parseBuyReport
+  parseBuyReport,
+  parseLoanReport,
+  parseStockReport
 };

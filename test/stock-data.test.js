@@ -6,14 +6,43 @@ const {
   createEmptyProductDatabase,
   getStockCodeFromFilename,
   mergeProducts,
-  parseBuyReport
+  parseBuyReport,
+  parseStockReport
 } = require("../stock-data");
 
 test("groups numbered photo filenames under one stock code", () => {
   assert.equal(getStockCodeFromFilename("B18194032-2.jpg"), "B18194032-2");
   assert.equal(getStockCodeFromFilename("B18194032-2 (1).jpg"), "B18194032-2");
   assert.equal(getStockCodeFromFilename("b18194032-2 (12).PNG"), "B18194032-2");
+  assert.equal(getStockCodeFromFilename("A2149497-1 (2).jpg"), "A2149497-1");
   assert.equal(getStockCodeFromFilename("not-a-stock-code.jpg"), null);
+});
+
+test("parses A-stock loan reports including continued descriptions", () => {
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["Pulled Cash Loans"],
+    ["From 23/07/2026 to 23/07/2026"],
+    [],
+    ["CL #", "Date", "Due", "Bay", "Amount"],
+    [2149497, new Date("2026-04-06T11:20:48Z"), new Date("2026-07-11T00:00:00Z"), "PRIVATE", 120],
+    ["A2149497-1 SONY ADAPTIVE NOISE CANCELLING WIRELESS OVER-EAR HEADPHONES"],
+    ["WH1000XM6 HEADPHONES"]
+  ]);
+
+  XLSX.utils.book_append_sheet(workbook, sheet, "Sheet1");
+  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "biff8" });
+  const parsed = parseStockReport(buffer, "2026-07-23.xls");
+
+  assert.equal(parsed.warnings.length, 0);
+  assert.equal(parsed.products.length, 1);
+  assert.equal(parsed.products[0].stockCode, "A2149497-1");
+  assert.equal(parsed.products[0].stockType, "loan");
+  assert.equal(parsed.products[0].loanNumber, "2149497");
+  assert.equal(parsed.products[0].reportDate, "2026-07-23");
+  assert.match(parsed.products[0].originalDescription, /WH1000XM6 HEADPHONES$/);
+  assert.equal(JSON.stringify(parsed.products).includes("PRIVATE"), false);
+  assert.equal(JSON.stringify(parsed.products).includes("120"), false);
 });
 
 test("parses a legacy XLS buy report and warns about filename date", () => {

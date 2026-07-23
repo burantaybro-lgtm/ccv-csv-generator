@@ -15,7 +15,7 @@ const {
   createEmptyProductDatabase,
   getStockCodeFromFilename,
   mergeProducts,
-  parseBuyReport
+  parseStockReport
 } = require("./stock-data");
 
 const app = express();
@@ -428,8 +428,8 @@ TRUSTED STOCK REPORT DATA:
 Treat the stock report description as authoritative for the product identity,
 brand and model. Use the photos to add visible condition and product details.
 Do not replace a known brand or model with a conflicting visual guess.
-Do not mention the buy number, transaction date, report filename, customer, or
-business purchase amount in the listing.`
+Do not mention internal transaction identifiers, dates, report filenames,
+customers, loan values, or business purchase amounts in the listing.`
     : "";
 
   const imageContent = photoFiles.map(photoFile => {
@@ -814,7 +814,7 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
         const download = await dbxReady.filesDownload({
           path: reportFile.path_lower
         });
-        const parsed = parseBuyReport(
+        const parsed = parseStockReport(
           Buffer.from(download.result.fileBinary),
           reportFile.name
         );
@@ -890,7 +890,7 @@ console.log(
       if (!stockCode) {
         reviewItems.push({
           filename: file.name,
-          reason: "No valid B-prefixed stock code found in filename"
+          reason: "No valid A- or B-prefixed stock code found in filename"
         });
         continue;
       }
