@@ -27,6 +27,25 @@ const {
 
 const app = express();
 let dropboxGenerationInProgress = false;
+let generationProgress = {
+  status: "idle",
+  stage: "Ready to generate",
+  currentStockCode: null,
+  completedItems: 0,
+  totalItems: 0,
+  reviewItems: 0,
+  lastProcessedTitle: null,
+  startedAt: null,
+  finishedAt: null,
+  error: null
+};
+
+function updateGenerationProgress(changes) {
+  generationProgress = {
+    ...generationProgress,
+    ...changes
+  };
+}
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -78,6 +97,9 @@ console.log(
 );
 
 app.use(cors());
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "dashboard.html"));
+});
 app.use(express.static("public"));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -801,6 +823,18 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
   }
 
   dropboxGenerationInProgress = true;
+  updateGenerationProgress({
+    status: "running",
+    stage: "Connecting to Dropbox",
+    currentStockCode: null,
+    completedItems: 0,
+    totalItems: 0,
+    reviewItems: 0,
+    lastProcessedTitle: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null
+  });
 
   try {
     const accessToken = await getDropboxAccessToken();
@@ -858,6 +892,7 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
       }
     }
 
+    updateGenerationProgress({ stage: "Loading stock database and reports" });
     let productDatabase = await loadProductDatabase();
     const reportWarnings = [];
     const processingWarnings = [];
@@ -915,6 +950,7 @@ if (fs.existsSync(csvPath)) {
       append: false
     });
 
+    updateGenerationProgress({ stage: "Checking the Dropbox Ready folder" });
     const readyEntries = await listAllFiles(readyFolder);
 
 console.log("Ready folder:", readyFolder);
@@ -934,6 +970,11 @@ console.log(
     );
 
     if (imageFiles.length === 0) {
+      updateGenerationProgress({
+        status: "completed",
+        stage: "No photos found in the Ready folder",
+        finishedAt: new Date().toISOString()
+      });
       return res.json({
         success: false,
         message: "No photos found in Dropbox Ready folder"
@@ -962,11 +1003,23 @@ console.log(
     }
 
     const createdListings = [];
+    const stockCodes = Object.keys(groups);
 
-    for (const stockCode of Object.keys(groups)) {
+    updateGenerationProgress({
+      stage: "Preparing items",
+      totalItems: stockCodes.length,
+      reviewItems: reviewItems.length
+    });
+
+    for (const stockCode of stockCodes) {
       const files = groups[stockCode];
       const localFiles = [];
       const stockRecord = productDatabase.products?.[stockCode];
+
+      updateGenerationProgress({
+        stage: "Checking stock report data",
+        currentStockCode: stockCode
+      });
 
       if (!stockRecord) {
         reviewItems.push({
@@ -974,9 +1027,13 @@ console.log(
           filenames: files.map(file => file.name),
           reason: "Stock code not found in imported reports"
         });
+        updateGenerationProgress({
+          reviewItems: reviewItems.length
+        });
         continue;
       }
 
+      updateGenerationProgress({ stage: "Downloading item photos" });
       for (const file of files) {
         const download = await dbxReady.filesDownload({
           path: file.path_lower
@@ -992,6 +1049,9 @@ console.log(
 
       const photoType = "Floorstock";
 
+      updateGenerationProgress({
+        stage: "AI is analysing photos and creating the listing"
+      });
 const listing = await createListingFromPhotos(
     stockCode,
     localFiles,
@@ -1002,6 +1062,11 @@ const listing = await createListingFromPhotos(
       await dropboxCsvWriter.writeRecords([listing]);
 
       createdListings.push({ listing, files });
+      updateGenerationProgress({
+        stage: "Listing added to CSV",
+        completedItems: createdListings.length,
+        lastProcessedTitle: listing.title || stockCode
+      });
 
       for (const localFile of localFiles) {
         const localPath = path.join("uploads", localFile);
@@ -1013,6 +1078,13 @@ const listing = await createListingFromPhotos(
     }
 
 if (createdListings.length === 0) {
+  updateGenerationProgress({
+    status: "completed",
+    stage: "All items require manual review",
+    currentStockCode: null,
+    reviewItems: reviewItems.length,
+    finishedAt: new Date().toISOString()
+  });
   return res.json({
     success: false,
     message: "No listings were created because the photos require review",
@@ -1024,12 +1096,17 @@ if (createdListings.length === 0) {
 
 const csvContent = fs.readFileSync(csvPath);
 
+updateGenerationProgress({
+  stage: "Uploading the completed CSV to Dropbox",
+  currentStockCode: null
+});
 await dbxReady.filesUpload({
   path: `/Trademe CSV Queue/Processed/CSV/trade-me-auto-listings-${Date.now()}.csv`,
   contents: csvContent,
   mode: "add"
 });
 
+updateGenerationProgress({ stage: "Moving processed photos" });
 for (const created of createdListings) {
   for (const file of created.files) {
     const processedPath = file.path_display.replace(
@@ -1063,6 +1140,15 @@ for (const created of createdListings) {
   }
 }
 
+    updateGenerationProgress({
+      status: "completed",
+      stage: "CSV completed and uploaded to Dropbox",
+      currentStockCode: null,
+      completedItems: createdListings.length,
+      reviewItems: reviewItems.length,
+      finishedAt: new Date().toISOString()
+    });
+
     res.json({
       success: true,
       message: "CSV rows created from Dropbox Ready folder",
@@ -1076,6 +1162,13 @@ for (const created of createdListings) {
 
   } catch (error) {
     console.error(error);
+    updateGenerationProgress({
+      status: "failed",
+      stage: "Generation failed",
+      currentStockCode: null,
+      error: error.message || "Unknown generation error",
+      finishedAt: new Date().toISOString()
+    });
 
     res.status(500).json({
       success: false,
@@ -1084,6 +1177,13 @@ for (const created of createdListings) {
   } finally {
     dropboxGenerationInProgress = false;
   }
+});
+
+app.get("/api/generation-status", (req, res) => {
+  res.json({
+    ...generationProgress,
+    inProgress: dropboxGenerationInProgress
+  });
 });
 
 const PORT = process.env.PORT || 3001;

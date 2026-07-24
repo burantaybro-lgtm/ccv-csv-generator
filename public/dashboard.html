@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCV CSV Generator</title>
+  <style>
+    :root {
+      --yellow: #eeb111;
+      --burgundy: #98132f;
+      --ink: #242124;
+      --muted: #6f6870;
+      --surface: #ffffff;
+      --background: #f5f2f3;
+      --success: #237a48;
+      --danger: #b42336;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(238,177,17,.18), transparent 34rem),
+        var(--background);
+    }
+
+    .topbar {
+      height: 12px;
+      background: linear-gradient(90deg, var(--burgundy) 0 72%, var(--yellow) 72%);
+    }
+
+    main {
+      width: min(920px, calc(100% - 32px));
+      margin: 48px auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 54px;
+      height: 54px;
+      border-radius: 15px;
+      color: white;
+      background: var(--burgundy);
+      font-weight: 800;
+      font-size: 20px;
+    }
+
+    h1, p { margin: 0; }
+    h1 { font-size: clamp(27px, 5vw, 40px); }
+    .subtitle { color: var(--muted); margin-top: 5px; }
+
+    .card {
+      padding: clamp(22px, 4vw, 38px);
+      background: var(--surface);
+      border-radius: 22px;
+      box-shadow: 0 18px 50px rgba(75, 37, 48, .1);
+    }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 36px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .spinner {
+      width: 25px;
+      height: 25px;
+      border: 4px solid #eadfe2;
+      border-top-color: var(--burgundy);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      display: none;
+    }
+
+    .running .spinner { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .progress-track {
+      height: 13px;
+      margin: 22px 0 12px;
+      overflow: hidden;
+      background: #eee8ea;
+      border-radius: 999px;
+    }
+
+    .progress-bar {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--burgundy), var(--yellow));
+      transition: width .35s ease;
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .details {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin: 28px 0;
+    }
+
+    .detail {
+      min-height: 102px;
+      padding: 18px;
+      border: 1px solid #ece5e7;
+      border-radius: 15px;
+      background: #fcfafb;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .value {
+      margin-top: 9px;
+      font-size: 18px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .message {
+      display: none;
+      margin: 0 0 20px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      line-height: 1.45;
+    }
+
+    .message.success { display: block; color: var(--success); background: #eaf7ef; }
+    .message.error { display: block; color: var(--danger); background: #fff0f1; }
+
+    button {
+      width: 100%;
+      min-height: 58px;
+      border: 0;
+      border-radius: 14px;
+      color: white;
+      background: var(--burgundy);
+      font-size: 18px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform .15s, opacity .15s;
+    }
+
+    button:hover:not(:disabled) { transform: translateY(-1px); }
+    button:disabled { cursor: wait; opacity: .55; }
+
+    .manual-link {
+      display: block;
+      margin-top: 18px;
+      color: var(--burgundy);
+      text-align: center;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    @media (max-width: 680px) {
+      main { margin: 28px auto; }
+      .details { grid-template-columns: 1fr; }
+      .detail { min-height: 82px; }
+      .progress-meta { flex-direction: column; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar"></div>
+  <main>
+    <div class="brand">
+      <div class="mark">CCV</div>
+      <div>
+        <h1>CSV Generator</h1>
+        <p class="subtitle">Create Trade Me listings from the Dropbox Ready folder</p>
+      </div>
+    </div>
+
+    <section class="card" id="statusCard">
+      <div class="status-line">
+        <div class="spinner" aria-hidden="true"></div>
+        <span id="stage">Ready to generate</span>
+      </div>
+
+      <div class="progress-track">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="progress-meta">
+        <span id="count">0 of 0 items completed</span>
+        <span id="started"></span>
+      </div>
+
+      <div class="details">
+        <div class="detail">
+          <div class="label">Processing now</div>
+          <div class="value" id="stockCode">—</div>
+        </div>
+        <div class="detail">
+          <div class="label">Last completed</div>
+          <div class="value" id="lastTitle">—</div>
+        </div>
+        <div class="detail">
+          <div class="label">Needs review</div>
+          <div class="value" id="reviewCount">0 items</div>
+        </div>
+      </div>
+
+      <div class="message" id="message"></div>
+      <button id="generateButton" type="button">Generate CSV from Dropbox</button>
+      <a class="manual-link" href="/index.html">Open manual photo uploader</a>
+    </section>
+  </main>
+
+  <script>
+    const button = document.getElementById("generateButton");
+    const card = document.getElementById("statusCard");
+    const stage = document.getElementById("stage");
+    const progressBar = document.getElementById("progressBar");
+    const count = document.getElementById("count");
+    const started = document.getElementById("started");
+    const stockCode = document.getElementById("stockCode");
+    const lastTitle = document.getElementById("lastTitle");
+    const reviewCount = document.getElementById("reviewCount");
+    const message = document.getElementById("message");
+
+    function renderStatus(data) {
+      const total = Number(data.totalItems || 0);
+      const completed = Number(data.completedItems || 0);
+      const percent = total ? Math.round((completed / total) * 100) : 0;
+
+      card.classList.toggle("running", data.status === "running");
+      button.disabled = data.inProgress || data.status === "running";
+      button.textContent = button.disabled ? "Generator is running…" : "Generate CSV from Dropbox";
+      stage.textContent = data.stage || "Ready to generate";
+      progressBar.style.width = `${percent}%`;
+      count.textContent = `${completed} of ${total} items completed`;
+      stockCode.textContent = data.currentStockCode || "—";
+      lastTitle.textContent = data.lastProcessedTitle || "—";
+      reviewCount.textContent = `${data.reviewItems || 0} item${data.reviewItems === 1 ? "" : "s"}`;
+      started.textContent = data.startedAt
+        ? `Started ${new Date(data.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : "";
+
+      message.className = "message";
+      message.textContent = "";
+      if (data.status === "completed") {
+        message.className = "message success";
+        message.textContent = data.stage;
+      } else if (data.status === "failed") {
+        message.className = "message error";
+        message.textContent = data.error || "The generator failed. Check the Render logs.";
+      }
+    }
+
+    async function loadStatus() {
+      try {
+        const response = await fetch("/api/generation-status", { cache: "no-store" });
+        renderStatus(await response.json());
+      } catch {
+        message.className = "message error";
+        message.textContent = "Could not load the generator status.";
+      }
+    }
+
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      message.className = "message";
+
+      try {
+        const response = await fetch("/generate-from-dropbox-ready");
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          message.className = "message error";
+          message.textContent = result.error || result.message || "CSV generation did not complete.";
+        }
+      } catch {
+        message.className = "message error";
+        message.textContent = "The connection stopped while generating the CSV. Check the status and Render logs.";
+      } finally {
+        await loadStatus();
+      }
+    });
+
+    loadStatus();
+    setInterval(loadStatus, 1000);
+  </script>
+</body>
+</html>
