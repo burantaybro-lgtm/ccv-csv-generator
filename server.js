@@ -13,7 +13,9 @@ const { Dropbox } = require("dropbox");
 const createCsvWriter = require("csv-writer").createObjectCsvWriter;
 const {
   findCategoryMatch,
-  loadCategoryRules
+  findDepartmentMatch,
+  getDepartmentCategoryText,
+  loadCategoryRuleWorkbook
 } = require("./category-matcher");
 const {
   buildTradeMeTitle,
@@ -65,12 +67,15 @@ const categories = XLSX.utils.sheet_to_json(sheet);
 const validCategoryIds = new Set(
   categories.map(category => String(category["Category Code"] || "").trim())
 );
-const approvedCategoryRules = loadCategoryRules(
+const categoryRuleWorkbook = loadCategoryRuleWorkbook(
   path.join(__dirname, "Category Rules.xlsx"),
   validCategoryIds
 );
 
-console.log(`Loaded ${approvedCategoryRules.length} approved category keywords`);
+console.log(
+  `Loaded ${categoryRuleWorkbook.allRules.length} approved category keywords `
+  + `across ${Object.keys(categoryRuleWorkbook.departments).length} departments`
+);
 
 app.use(cors());
 app.use(express.static("public"));
@@ -155,69 +160,6 @@ const csvWriter = createCsvWriter({
 
   append: fs.existsSync("trade-me-auto-listings.csv")
 });
-
-const searchWords = [
-  "watch", "casio", "g-shock", "bike", "phone", "laptop",
-  "tool", "drill", "game", "console", "speaker", "headphones",
-  "jewellery", "ring", "necklace", "pendant", "earrings",
-  "chain", "bracelet", "bangle"
-];
-
-const categoryOverrides = [
-  {
-    keywords: ["mens watch", "men's watch", "dress watch"],
-    category_id: "7354"
-  },
-  {
-    keywords: ["yg ring", "yellow gold ring", "diamond ring"],
-    category_id: "7374"
-  },
-  {
-    keywords: ["necklace", "chain", "gold chain"],
-    category_id: "3999"
-  },
-  {
-    keywords: ["ps4 console", "playstation 4"],
-    category_id: "9908"
-  },
-  {
-    keywords: ["ps5 console", "playstation 5"],
-    category_id: "5466"
-  },
-  {
-    keywords: ["ps3 console", "playstation 3"],
-    category_id: "6207"
-  },
-  {
-    keywords: ["ps2 console", "playstation 2"],
-    category_id: "858"
-  },
-  {
-    keywords: ["sewing", "overlocker"],
-    category_id: "1099"
-  },
-  {
-    keywords: ["jigsaw", "saw", "circular saw"],
-    category_id: "6020"
-  }
-];
-
-function getCategoryText() {
-  return categories
-    .filter(cat => {
-      const pathText = String(cat["Category Path"] || "").toLowerCase();
-      const nameText = String(cat["Name"] || "").toLowerCase();
-
-      return searchWords.some(word =>
-        pathText.includes(word) || nameText.includes(word)
-      );
-    })
-    .slice(0, 150)
-    .map(cat =>
-      `Category Code: ${cat["Category Code"]} | Path: ${cat["Category Path"]}`
-    )
-    .join("\n");
-}
 
 function getDeliveryPrice(listing) {
   const text =
@@ -430,7 +372,6 @@ async function createListingFromPhotos(
   stockRecord = null
 ) {
   const photoIdList = photoFiles.join(";");
-  const categoryText = getCategoryText();
 
   const trustedStockText = stockRecord
     ? `
@@ -456,6 +397,62 @@ customers, loan values, or business purchase amounts in the listing.`
       image_url: `data:${mimeType};base64,${imageBase64}`
     };
   });
+
+  let departmentMatch = findDepartmentMatch(
+    stockRecord?.originalDescription || "",
+    categoryRuleWorkbook
+  );
+
+  if (!departmentMatch) {
+    const departmentNames = Object.entries(categoryRuleWorkbook.departments)
+      .filter(([, rules]) => rules.length > 0)
+      .map(([department]) => department);
+    const departmentResult = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `Choose exactly one department for this item.
+Return only the department name, with no explanation.
+
+Allowed departments:
+${departmentNames.join("\n")}
+
+Stock report description:
+${stockRecord?.originalDescription || "(not available)"}`
+            },
+            ...imageContent
+          ]
+        }
+      ]
+    });
+
+    const selectedDepartment = departmentResult.output_text.trim();
+    if (categoryRuleWorkbook.departments[selectedDepartment]) {
+      departmentMatch = {
+        department: selectedDepartment,
+        keyword: null,
+        source: "AI department classification"
+      };
+    }
+  }
+
+  const selectedDepartment = departmentMatch?.department || "Other Categories";
+  const departmentRules =
+    categoryRuleWorkbook.departments[selectedDepartment] || [];
+  const categoryText = getDepartmentCategoryText(
+    selectedDepartment,
+    categoryRuleWorkbook
+  );
+
+  if (!categoryText) {
+    throw new Error(
+      `No approved category rules are available for department "${selectedDepartment}"`
+    );
+  }
 
   const result = await openai.responses.create({
     model: "gpt-4.1-mini",
@@ -488,17 +485,12 @@ IMPORTANT RULES:
 - Use plain numbers only. Example: "149", not "$149".
 - If unsure, choose a conservative second-hand price.
 
-Use these category override rules FIRST:
-
-${JSON.stringify(categoryOverrides, null, 2)}
-
-If the item clearly matches an override keyword, use that override category_id.
-
-Only if no override matches, choose the best category_id from this shortlist:
+The item has been classified into the "${selectedDepartment}" department.
+Choose the best category_id only from this department shortlist:
 
 ${categoryText}
 
-The category_id must be either an override category_id or a Category Code from the shortlist.
+The category_id must be a Category Code from the shortlist.
 Do not invent a category_id.
 Do not leave category_id blank.
 
@@ -645,7 +637,7 @@ Use this exact JSON structure:
 
   const reportCategoryMatch = findCategoryMatch(
     stockRecord?.originalDescription || "",
-    approvedCategoryRules
+    departmentRules
   );
   const analysedCategoryMatch = reportCategoryMatch || findCategoryMatch(
     [
@@ -655,19 +647,32 @@ Use this exact JSON structure:
       listing.model,
       listing.item_type
     ].filter(Boolean).join(" "),
-    approvedCategoryRules
+    departmentRules
   );
 
   if (analysedCategoryMatch) {
     listing.category_id = analysedCategoryMatch.categoryId;
     listing.category_match = {
       source: reportCategoryMatch ? "stock report keyword" : "AI listing keyword",
+      department: selectedDepartment,
       keyword: analysedCategoryMatch.keyword,
       categoryPath: analysedCategoryMatch.categoryPath
     };
   } else {
+    const allowedCategoryIds = new Set(
+      departmentRules.map(rule => rule.categoryId)
+    );
+
+    if (!allowedCategoryIds.has(String(listing.category_id || ""))) {
+      throw new Error(
+        `AI selected category ${listing.category_id || "(blank)"} outside `
+        + `department "${selectedDepartment}"`
+      );
+    }
+
     listing.category_match = {
-      source: "AI fallback",
+      source: "AI department shortlist",
+      department: selectedDepartment,
       keyword: null,
       categoryPath: null
     };
