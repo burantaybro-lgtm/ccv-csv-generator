@@ -155,6 +155,44 @@
     .message.success { display: block; color: var(--success); background: #eaf7ef; }
     .message.error { display: block; color: var(--danger); background: #fff0f1; }
 
+    .review-panel {
+      display: none;
+      margin: 0 0 24px;
+      padding: 20px;
+      border: 1px solid #f0d48a;
+      border-radius: 15px;
+      background: #fff9e8;
+    }
+
+    .review-panel.visible { display: block; }
+    .review-panel h2 { margin: 0 0 6px; font-size: 20px; }
+    .review-intro { color: var(--muted); margin-bottom: 14px; line-height: 1.45; }
+    .review-list { display: grid; gap: 10px; }
+
+    .review-item {
+      padding: 14px;
+      border-left: 5px solid var(--yellow);
+      border-radius: 10px;
+      background: white;
+    }
+
+    .review-name {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .review-reason {
+      margin-top: 6px;
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .review-action {
+      margin-top: 6px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
     button {
       width: 100%;
       min-height: 58px;
@@ -229,6 +267,15 @@
       </div>
 
       <div class="message" id="message"></div>
+
+      <section class="review-panel" id="reviewPanel">
+        <h2>Items needing review</h2>
+        <p class="review-intro">
+          Fix these files or reports in Dropbox, then run the generator again.
+        </p>
+        <div class="review-list" id="reviewList"></div>
+      </section>
+
       <button id="generateButton" type="button">Generate CSV from Dropbox</button>
       <a class="manual-link" href="/index.html">Open manual photo uploader</a>
     </section>
@@ -244,7 +291,46 @@
     const stockCode = document.getElementById("stockCode");
     const lastTitle = document.getElementById("lastTitle");
     const reviewCount = document.getElementById("reviewCount");
+    const reviewPanel = document.getElementById("reviewPanel");
+    const reviewList = document.getElementById("reviewList");
     const message = document.getElementById("message");
+
+    function renderReviewItems(items) {
+      reviewList.replaceChildren();
+      reviewPanel.classList.toggle("visible", items.length > 0);
+
+      for (const item of items) {
+        const card = document.createElement("div");
+        card.className = "review-item";
+
+        const name = document.createElement("div");
+        name.className = "review-name";
+        name.textContent =
+          item.stockCode
+          || item.filename
+          || (item.filenames || []).join(", ")
+          || "Unknown item";
+
+        const files = document.createElement("div");
+        files.className = "review-action";
+        files.textContent = item.stockCode && item.filenames?.length
+          ? `Photos: ${item.filenames.join(", ")}`
+          : "";
+
+        const reason = document.createElement("div");
+        reason.className = "review-reason";
+        reason.textContent = `Reason: ${item.reason || "Review required"}`;
+
+        const action = document.createElement("div");
+        action.className = "review-action";
+        action.textContent = `How to fix: ${item.action || "Check the filename and stock report."}`;
+
+        card.append(name);
+        if (files.textContent) card.append(files);
+        card.append(reason, action);
+        reviewList.append(card);
+      }
+    }
 
     function renderStatus(data) {
       const total = Number(data.totalItems || 0);
@@ -260,6 +346,9 @@
       stockCode.textContent = data.currentStockCode || "—";
       lastTitle.textContent = data.lastProcessedTitle || "—";
       reviewCount.textContent = `${data.reviewItems || 0} item${data.reviewItems === 1 ? "" : "s"}`;
+      renderReviewItems(
+        Array.isArray(data.reviewItemDetails) ? data.reviewItemDetails : []
+      );
       started.textContent = data.startedAt
         ? `Started ${new Date(data.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
         : "";

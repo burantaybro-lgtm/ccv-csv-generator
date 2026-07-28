@@ -34,6 +34,7 @@ let generationProgress = {
   completedItems: 0,
   totalItems: 0,
   reviewItems: 0,
+  reviewItemDetails: [],
   lastProcessedTitle: null,
   startedAt: null,
   finishedAt: null,
@@ -830,6 +831,7 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
     completedItems: 0,
     totalItems: 0,
     reviewItems: 0,
+    reviewItemDetails: [],
     lastProcessedTitle: null,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -990,7 +992,8 @@ console.log(
       if (!stockCode) {
         reviewItems.push({
           filename: file.name,
-          reason: "No valid A- or B-prefixed stock code found in filename"
+          reason: "No valid A- or B-prefixed stock code found in filename",
+          action: "Rename the photo so it begins with its full stock code, then leave it in the Ready folder."
         });
         continue;
       }
@@ -1008,7 +1011,8 @@ console.log(
     updateGenerationProgress({
       stage: "Preparing items",
       totalItems: stockCodes.length,
-      reviewItems: reviewItems.length
+      reviewItems: reviewItems.length,
+      reviewItemDetails: [...reviewItems]
     });
 
     for (const stockCode of stockCodes) {
@@ -1025,10 +1029,12 @@ console.log(
         reviewItems.push({
           stockCode,
           filenames: files.map(file => file.name),
-          reason: "Stock code not found in imported reports"
+          reason: "Stock code not found in imported reports",
+          action: "Upload the daily report containing this stock code to the Reports folder, or correct the photo filename."
         });
         updateGenerationProgress({
-          reviewItems: reviewItems.length
+          reviewItems: reviewItems.length,
+          reviewItemDetails: [...reviewItems]
         });
         continue;
       }
@@ -1083,6 +1089,7 @@ if (createdListings.length === 0) {
     stage: "All items require manual review",
     currentStockCode: null,
     reviewItems: reviewItems.length,
+    reviewItemDetails: [...reviewItems],
     finishedAt: new Date().toISOString()
   });
   return res.json({
@@ -1146,6 +1153,7 @@ for (const created of createdListings) {
       currentStockCode: null,
       completedItems: createdListings.length,
       reviewItems: reviewItems.length,
+      reviewItemDetails: [...reviewItems],
       finishedAt: new Date().toISOString()
     });
 
