@@ -24,6 +24,12 @@ const {
   mergeProducts,
   parseStockReport
 } = require("./stock-data");
+const {
+  getJewelleryReviewIssue,
+  mergeJewelleryProducts,
+  mergeJewelleryScreenDetails,
+  parseJewelleryReport
+} = require("./jewellery-data");
 
 const app = express();
 let dropboxGenerationInProgress = false;
@@ -74,6 +80,69 @@ async function getDropboxAccessToken() {
   }
 
   return data.access_token;
+}
+
+async function readJewelleryScreenDetails(dbx, screenshotFiles) {
+  if (screenshotFiles.length === 0) {
+    return [];
+  }
+
+  const imageContent = [];
+
+  for (const file of screenshotFiles) {
+    const download = await dbx.filesDownload({
+      path: file.path_lower
+    });
+    const extension = path.extname(file.name).toLowerCase();
+    const mimeType = extension === ".png" ? "image/png" : "image/jpeg";
+    const imageBase64 = Buffer.from(download.result.fileBinary).toString("base64");
+
+    imageContent.push({
+      type: "input_image",
+      image_url: `data:${mimeType};base64,${imageBase64}`
+    });
+  }
+
+  const result = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    input: [{
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: `Read every visible jewellery row from these software screenshots.
+
+Return only a valid JSON array. Each row must use:
+{
+  "stockCode": "A-or-B stock code exactly as shown",
+  "size": "value from Model / Title with the word SIZE removed, or blank",
+  "ccCode": "digits from CC Barcode, or blank",
+  "confidence": "high, medium, or low"
+}
+
+Rules:
+- Match Size and CC Barcode to the stock code on the same row.
+- Do not invent missing values.
+- A blank size is valid for jewellery that is not a ring.
+- Use high confidence only when the stock code and CC Barcode are clearly legible.
+- Ignore column headings and non-stock rows.`
+        },
+        ...imageContent
+      ]
+    }]
+  });
+
+  const cleanJson = result.output_text
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const parsed = JSON.parse(cleanJson);
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Jewellery screenshot OCR did not return an array");
+  }
+
+  return parsed;
 }
 
 if (!fs.existsSync("uploads")) {
@@ -291,10 +360,17 @@ function applyTradeMeDefaults(listing) {
   return listing;
 }
 
-function isJewelleryItem(listing, photoType = "") {
+function isWatchItem(listing, stockRecord = null) {
+  return /\bwatch\b/i.test(
+    `${listing.title || ""} ${listing.item_type || ""} `
+    + `${stockRecord?.jewelleryDescription || ""}`
+  );
+}
+
+function isJewelleryItem(listing, photoType = "", stockRecord = null) {
   const text = `${photoType} ${listing.title} ${listing.body}`.toLowerCase();
 
-  return [
+  return !isWatchItem(listing, stockRecord) && [
     "jewellery",
     "ring",
     "necklace",
@@ -309,14 +385,31 @@ function isJewelleryItem(listing, photoType = "") {
   ].some(word => text.includes(word));
 }
 
-function isValuedJewellery(photoType = "") {
-  return photoType.toLowerCase().includes("valued");
+function isValuedJewellery(listing, photoType = "") {
+  return photoType.toLowerCase().includes("valued")
+    || listing.valuation_company_detected === true
+    || /jewellery valuers company/i.test(
+      String(listing.valuation_company || "")
+    );
+}
+
+function formatValuationMoney(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  const amount = Number(text.replace(/[$,\s]/g, ""));
+  return Number.isFinite(amount)
+    ? `$${amount.toLocaleString("en-NZ", { maximumFractionDigits: 2 })}`
+    : text;
 }
 
 function formatValuedJewelleryBody(listing) {
-  return `NEW RETAIL PRICE: ${listing.new_retail_price || ""}
+  return `NEW RETAIL PRICE: ${formatValuationMoney(listing.new_retail_price)}
 
-MARKET VALUE: ${listing.market_value || ""}
+MARKET VALUE: ${formatValuationMoney(listing.market_value)}
 
 HALLMARK/STAMPED: ${listing.hallmark || listing.metal || ""}
 
@@ -324,32 +417,63 @@ SIZE: ${listing.size || ""}
 
 WEIGHT: ${listing.weight || ""}
 
-STONES/DIAMOND: ${listing.stones || "PLEASE SEE VALUATION FOR MORE INFO"}`;
+STONES/DIAMOND: PLEASE SEE VALUATION FOR MORE INFO`;
 }
 
 function formatStandardJewelleryBody(listing) {
-  return `ITEM TYPE:
-${listing.item_type || ""}
+  return `ITEM TYPE: ${listing.item_type || ""}
 
-METAL:
-${listing.metal || ""}
+METAL: ${listing.metal || ""}
 
-STONE:
-${listing.stone || ""}
+STONES: ${listing.stones || listing.stone || ""}
 
-SIZE:
-${listing.size || ""}
+WEIGHT: ${listing.weight || ""}
 
-WEIGHT:
-${listing.weight || ""}
+SIZE: ${listing.size || ""}
 
-COSMETIC CONDITION:
-(${listing.condition || "B"})
+CC CODE: ${listing.cc_code || ""}`;
+}
 
-(A) LIKE NEW
-(B) GOOD CONDITION
-(C) AVERAGE CONDITION
-(D) POOR CONDITION`;
+function getListingReviewIssue(listing, stockRecord, photoType = "") {
+  if (!isJewelleryItem(listing, photoType, stockRecord)) {
+    return null;
+  }
+
+  if (isValuedJewellery(listing, photoType)) {
+    const missingFields = [
+      ["new retail price", listing.new_retail_price],
+      ["market value", listing.market_value],
+      ["hallmark/stamp", listing.hallmark],
+      ["size", listing.size],
+      ["weight", listing.weight]
+    ].filter(([, value]) => !String(value || "").trim());
+
+    return missingFields.length
+      ? `Valuation could not confidently supply: ${missingFields.map(([name]) => name).join(", ")}`
+      : null;
+  }
+
+  if (!stockRecord?.jewelleryDescription) {
+    return "Jewellery was detected but no matching unvalued jewellery report or recognised Jewellery Valuers Company Ltd. valuation was found";
+  }
+
+  const missingFields = [
+    ["metal", listing.metal],
+    ["weight", listing.weight],
+    ["CC Code", listing.cc_code]
+  ];
+
+  if (/\bRING\b/i.test(stockRecord.jewelleryDescription || "")) {
+    missingFields.push(["size", listing.size]);
+  }
+
+  const missing = missingFields
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([name]) => name);
+
+  return missing.length
+    ? `Standard jewellery data is missing: ${missing.join(", ")}`
+    : null;
 }
 
 function formatFloorstockBody(listing) {
@@ -368,15 +492,18 @@ COSMETIC CONDITION:
 (D) POOR CONDITION`;
 }
 
-function applyListingTemplate(listing, photoType = "") {
-  if (isJewelleryItem(listing, photoType) && isValuedJewellery(photoType)) {
+function applyListingTemplate(listing, photoType = "", stockRecord = null) {
+  if (
+    isJewelleryItem(listing, photoType, stockRecord)
+    && isValuedJewellery(listing, photoType)
+  ) {
     listing.folder = "Valued Jewellery";
     listing.delivery_price = "Free shipping";
     listing.body = formatValuedJewelleryBody(listing);
     return listing;
   }
 
-  if (isJewelleryItem(listing, photoType)) {
+  if (isJewelleryItem(listing, photoType, stockRecord)) {
     listing.folder = "Jewellery";
     listing.delivery_price = "Small bag";
     listing.body = formatStandardJewelleryBody(listing);
@@ -395,6 +522,10 @@ async function createListingFromPhotos(
   stockRecord = null
 ) {
   const photoIdList = photoFiles.join(";");
+  const categorySourceText = [
+    stockRecord?.originalDescription,
+    stockRecord?.jewelleryDescription
+  ].filter(Boolean).join(" ");
 
   const trustedStockText = stockRecord
     ? `
@@ -407,6 +538,21 @@ brand and model. Use the photos to add visible condition and product details.
 Do not replace a known brand or model with a conflicting visual guess.
 Do not mention internal transaction identifiers, dates, report filenames,
 customers, loan values, or business purchase amounts in the listing.`
+    : "";
+
+  const trustedJewelleryText = stockRecord?.jewelleryDescription
+    ? `
+TRUSTED JEWELLERY REPORT DATA:
+- Description: ${stockRecord.jewelleryDescription}
+- Metal: ${stockRecord.metal || "(extract from description)"}
+- Weight: ${stockRecord.weight || "(extract from description)"}
+- Size: ${stockRecord.size || "(not supplied)"}
+- CC Code: ${stockRecord.ccCode || "(not supplied)"}
+
+Use this report data instead of guessing jewellery specifications from the photo.
+Use the photo to identify the specific item type, for example engagement ring,
+dress ring, trio set, hoop earrings, drop earrings, stud earrings, belcher
+chain, curb chain, or Cuban chain.`
     : "";
 
   const imageContent = photoFiles.map(photoFile => {
@@ -422,7 +568,7 @@ customers, loan values, or business purchase amounts in the listing.`
   });
 
   let departmentMatch = findDepartmentMatch(
-    stockRecord?.originalDescription || "",
+    categorySourceText,
     categoryRuleWorkbook
   );
 
@@ -445,7 +591,7 @@ Allowed departments:
 ${departmentNames.join("\n")}
 
 Stock report description:
-${stockRecord?.originalDescription || "(not available)"}`
+${categorySourceText || "(not available)"}`
             },
             ...imageContent
           ]
@@ -491,6 +637,7 @@ Look at all supplied item photos and create Trade Me CSV listing data.
 
 Photo type: "${photoType}"
 ${trustedStockText}
+${trustedJewelleryText}
 
 IMPORTANT RULES:
 
@@ -536,6 +683,16 @@ SIZE:
 WEIGHT:
 {if visible/known, otherwise leave blank}
 
+For standard jewellery with TRUSTED JEWELLERY REPORT DATA:
+- item_type must be specific, such as engagement ring, dress ring, trio set,
+  hoop earrings, drop earrings, stud earrings, belcher chain, curb chain, or
+  Cuban chain.
+- Expand YG to Yellow Gold, WG to White Gold, RG to Rose Gold, SS to Sterling
+  Silver, PT to Platinum, TI to Titanium, TUNG to Tungsten, and ST/ST to
+  Stainless Steel.
+- stones must describe only stones stated in the trusted report description.
+- Never invent a stone, weight, size, CC Code, hallmark or valuation amount.
+
 For all non-jewellery items, the body must use this exact format:
 
 MODEL:
@@ -557,7 +714,14 @@ Do NOT use markdown.
 Do NOT use backticks.
 
 For valued jewellery:
-- If photoType is "Valued Jewellery", extract the valuation details if visible.
+- Detect whether any supplied page is a valuation issued by exactly
+  "Jewellery Valuers Company Ltd.".
+- Set valuation_company_detected to true only when that company name is visible.
+- new_retail_price is the "Est. Retail Value".
+- market_value is the "Fair Market Value".
+- hallmark is the value following "Stamped".
+- size is the item size stated in the valuation.
+- weight is the total item weight stated in the valuation.
 - new_retail_price should be the valuation retail price.
 - market_value should be the valuation/market value.
 - hallmark should be the stamped metal mark, for example 9CT, 14K, 18CT.
@@ -636,6 +800,9 @@ Use this exact JSON structure:
   "hallmark": "",
   "new_retail_price": "",
   "market_value": "",
+  "valuation_company": "",
+  "valuation_company_detected": false,
+  "cc_code": "",
   "model": "",	
   "condition": "",
   "update_active_listings": "FALSE"
@@ -658,8 +825,18 @@ Use this exact JSON structure:
   listing.product_id_for_member = stockCode;
   listing.photo_id_list = photoIdList;
 
+  if (
+    stockRecord?.jewelleryDescription
+    && !isValuedJewellery(listing, photoType)
+  ) {
+    listing.metal = stockRecord.metal || listing.metal || "";
+    listing.weight = stockRecord.weight || listing.weight || "";
+    listing.size = stockRecord.size || "";
+    listing.cc_code = stockRecord.ccCode || "";
+  }
+
   const reportCategoryMatch = findCategoryMatch(
-    stockRecord?.originalDescription || "",
+    categorySourceText,
     departmentRules
   );
   const analysedCategoryMatch = reportCategoryMatch || findCategoryMatch(
@@ -702,7 +879,7 @@ Use this exact JSON structure:
   }
 
   applyTradeMeDefaults(listing);
-return applyListingTemplate(listing, photoType);
+return applyListingTemplate(listing, photoType, stockRecord);
 }
 
 app.post("/upload", upload.array("photos", 10), async (req, res) => {
@@ -848,6 +1025,7 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
     const readyFolder = "/Trademe CSV Queue/Ready";
     const processedFolder = "/Trademe CSV Queue/Processed";
     const reportsFolder = "/Trademe CSV Queue/Reports";
+    const jewelleryReportsFolder = "/Trademe CSV Queue/Reports-Jewellery";
     const databasePath = "/Trademe CSV Queue/Database/products.json";
 
     async function listAllFiles(folder) {
@@ -899,6 +1077,8 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
     const reportWarnings = [];
     const processingWarnings = [];
     let importedReportCount = 0;
+    let importedJewelleryReportCount = 0;
+    let jewelleryProducts = {};
 
     try {
       const reportEntries = await listAllFiles(reportsFolder);
@@ -927,6 +1107,59 @@ app.get("/generate-from-dropbox-ready", async (req, res) => {
       }
 
       reportWarnings.push(`Dropbox Reports folder was not found: ${reportsFolder}`);
+    }
+
+    updateGenerationProgress({ stage: "Loading jewellery reports and screenshot details" });
+    try {
+      const jewelleryEntries = await listAllFiles(jewelleryReportsFolder);
+      const jewelleryReportFiles = jewelleryEntries.filter(entry =>
+        entry[".tag"] === "file" && /\.(xls|xlsx)$/i.test(entry.name)
+      );
+      const jewelleryScreenshotFiles = jewelleryEntries.filter(entry =>
+        entry[".tag"] === "file" && /\.(jpg|jpeg|png)$/i.test(entry.name)
+      );
+
+      for (const reportFile of jewelleryReportFiles) {
+        const download = await dbxReady.filesDownload({
+          path: reportFile.path_lower
+        });
+        const parsed = parseJewelleryReport(
+          Buffer.from(download.result.fileBinary),
+          reportFile.name
+        );
+
+        jewelleryProducts = mergeJewelleryProducts(
+          jewelleryProducts,
+          parsed.products
+        );
+        reportWarnings.push(...parsed.warnings);
+        importedJewelleryReportCount += 1;
+      }
+
+      if (jewelleryScreenshotFiles.length > 0) {
+        const screenshotDetails = await readJewelleryScreenDetails(
+          dbxReady,
+          jewelleryScreenshotFiles
+        );
+        jewelleryProducts = mergeJewelleryScreenDetails(
+          jewelleryProducts,
+          screenshotDetails
+        );
+      } else if (jewelleryReportFiles.length > 0) {
+        reportWarnings.push(
+          `${jewelleryReportsFolder}: no screenshot was found for Size and CC Code`
+        );
+      }
+    } catch (error) {
+      const message = String(error?.error?.error_summary || error?.message || error);
+
+      if (message.includes("not_found")) {
+        reportWarnings.push(
+          `Dropbox jewellery reports folder was not found: ${jewelleryReportsFolder}`
+        );
+      } else {
+        throw error;
+      }
     }
 
     if (importedReportCount > 0) {
@@ -1018,7 +1251,17 @@ console.log(
     for (const stockCode of stockCodes) {
       const files = groups[stockCode];
       const localFiles = [];
-      const stockRecord = productDatabase.products?.[stockCode];
+      const mainStockRecord = productDatabase.products?.[stockCode];
+      const jewelleryRecord = jewelleryProducts[stockCode];
+      const stockRecord = mainStockRecord || jewelleryRecord
+        ? {
+            ...(mainStockRecord || {
+              stockCode,
+              originalDescription: jewelleryRecord?.jewelleryDescription || ""
+            }),
+            ...(jewelleryRecord || {})
+          }
+        : null;
 
       updateGenerationProgress({
         stage: "Checking stock report data",
@@ -1031,6 +1274,24 @@ console.log(
           filenames: files.map(file => file.name),
           reason: "Stock code not found in imported reports",
           action: "Upload the daily report containing this stock code to the Reports folder, or correct the photo filename."
+        });
+        updateGenerationProgress({
+          reviewItems: reviewItems.length,
+          reviewItemDetails: [...reviewItems]
+        });
+        continue;
+      }
+
+      const jewelleryReviewIssue = jewelleryRecord?.jewelleryDescription
+        ? getJewelleryReviewIssue(jewelleryRecord)
+        : null;
+
+      if (jewelleryReviewIssue) {
+        reviewItems.push({
+          stockCode,
+          filenames: files.map(file => file.name),
+          reason: jewelleryReviewIssue,
+          action: "Upload a clear screenshot showing this stock code, Model / Title and CC Barcode to the Reports-Jewellery folder."
         });
         updateGenerationProgress({
           reviewItems: reviewItems.length,
@@ -1064,6 +1325,35 @@ const listing = await createListingFromPhotos(
     photoType,
     stockRecord
 );
+
+      const listingReviewIssue = getListingReviewIssue(
+        listing,
+        stockRecord,
+        photoType
+      );
+
+      if (listingReviewIssue) {
+        reviewItems.push({
+          stockCode,
+          filenames: files.map(file => file.name),
+          reason: listingReviewIssue,
+          action: isValuedJewellery(listing, photoType)
+            ? "Upload clearer photos of the complete Jewellery Valuers Company Ltd. valuation with the item photos."
+            : "Check the jewellery Excel report and upload a clearer details screenshot showing the matching stock code."
+        });
+        updateGenerationProgress({
+          reviewItems: reviewItems.length,
+          reviewItemDetails: [...reviewItems]
+        });
+
+        for (const localFile of localFiles) {
+          const localPath = path.join("uploads", localFile);
+          if (fs.existsSync(localPath)) {
+            fs.unlinkSync(localPath);
+          }
+        }
+        continue;
+      }
 
       await dropboxCsvWriter.writeRecords([listing]);
 
@@ -1163,6 +1453,7 @@ for (const created of createdListings) {
       count: createdListings.length,
       listings: createdListings.map(created => created.listing),
       importedReportCount,
+      importedJewelleryReportCount,
       reportWarnings,
       processingWarnings,
       reviewItems
