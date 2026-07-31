@@ -167,10 +167,60 @@ function getJewelleryReviewIssue(record) {
   return null;
 }
 
+function getValuedTitleParts(listing) {
+  const valueText = String(listing?.new_retail_price || "").trim();
+  const numericValue = Number(valueText.replace(/[$,\s]/g, ""));
+  const newRetailValue = Number.isFinite(numericValue) && numericValue > 0
+    ? `$${numericValue.toLocaleString("en-NZ", { maximumFractionDigits: 2 })}`
+    : "";
+  const metalText = [
+    listing?.metal,
+    listing?.hallmark
+  ].filter(Boolean).join(" ").toUpperCase();
+  const caratMatch = metalText.match(/\b(\d{1,2})\s*(?:CT|CARAT|K)\b/);
+  const hallmark = String(listing?.hallmark || "").replace(/\D/g, "");
+  const hallmarkCarats = {
+    375: "9CT",
+    417: "10CT",
+    585: "14CT",
+    750: "18CT",
+    916: "22CT",
+    917: "22CT"
+  };
+  const carat = caratMatch
+    ? `${Number(caratMatch[1])}CT`
+    : hallmarkCarats[hallmark] || "";
+  let colour = "";
+
+  if (/\bYG\b|YELLOW GOLD/.test(metalText)) {
+    colour = "YG";
+  } else if (/\bWG\b|WHITE GOLD/.test(metalText)) {
+    colour = "WG";
+  } else if (/\bRG\b|ROSE GOLD/.test(metalText)) {
+    colour = "RG";
+  }
+
+  return { newRetailValue, carat, colour };
+}
+
+function buildValuedJewelleryTitle(listing) {
+  const { newRetailValue, carat, colour } = getValuedTitleParts(listing);
+  const cleanTitle = String(listing?.title || "")
+    .replace(/^\s*\$[\d,.]+\s*/i, "")
+    .replace(/^\s*\d{1,2}\s*(?:CT|CARAT|K)\s+(?:YG|WG|RG)\b\s*/i, "")
+    .trim();
+
+  return [newRetailValue, carat, colour, cleanTitle]
+    .filter(Boolean)
+    .join(" ");
+}
+
 module.exports = {
+  buildValuedJewelleryTitle,
   extractMetal,
   extractWeight,
   getJewelleryReviewIssue,
+  getValuedTitleParts,
   mergeJewelleryProducts,
   mergeJewelleryScreenDetails,
   normaliseJewelleryStockCode,

@@ -5,9 +5,11 @@ const test = require("node:test");
 const XLSX = require("xlsx");
 
 const {
+  buildValuedJewelleryTitle,
   extractMetal,
   extractWeight,
   getJewelleryReviewIssue,
+  getValuedTitleParts,
   mergeJewelleryProducts,
   mergeJewelleryScreenDetails,
   parseJewelleryReport
@@ -111,4 +113,34 @@ test("requires a readable size for rings and CC Code for standard jewellery", ()
     }),
     /CC Code/
   );
+});
+
+test("builds a valued jewellery title from retail value, hallmark and colour", () => {
+  const listing = {
+    title: "Sapphire & Diamond Cluster Ring",
+    new_retail_price: "5600",
+    hallmark: "Stamped 750",
+    metal: "18 carat yellow gold"
+  };
+
+  assert.deepEqual(getValuedTitleParts(listing), {
+    newRetailValue: "$5,600",
+    carat: "18CT",
+    colour: "YG"
+  });
+  assert.equal(
+    buildValuedJewelleryTitle(listing),
+    "$5,600 18CT YG Sapphire & Diamond Cluster Ring"
+  );
+});
+
+test("does not duplicate an existing valued jewellery title prefix", () => {
+  const title = buildValuedJewelleryTitle({
+    title: "$5,000 18CT YG Diamond Dress Ring",
+    new_retail_price: "$5,000",
+    hallmark: "750",
+    metal: "Yellow Gold"
+  });
+
+  assert.equal(title, "$5,000 18CT YG Diamond Dress Ring");
 });

@@ -25,7 +25,9 @@ const {
   parseStockReport
 } = require("./stock-data");
 const {
+  buildValuedJewelleryTitle,
   getJewelleryReviewIssue,
+  getValuedTitleParts,
   mergeJewelleryProducts,
   mergeJewelleryScreenDetails,
   parseJewelleryReport
@@ -447,6 +449,15 @@ function getListingReviewIssue(listing, stockRecord, photoType = "") {
       ["size", listing.size],
       ["weight", listing.weight]
     ].filter(([, value]) => !String(value || "").trim());
+    const titleParts = getValuedTitleParts(listing);
+
+    if (!titleParts.carat) {
+      missingFields.push(["gold karat for title", ""]);
+    }
+
+    if (!titleParts.colour) {
+      missingFields.push(["gold colour for title", ""]);
+    }
 
     return missingFields.length
       ? `Valuation could not confidently supply: ${missingFields.map(([name]) => name).join(", ")}`
@@ -876,6 +887,10 @@ Use this exact JSON structure:
       keyword: null,
       categoryPath: null
     };
+  }
+
+  if (isValuedJewellery(listing, photoType)) {
+    listing.title = buildValuedJewelleryTitle(listing);
   }
 
   applyTradeMeDefaults(listing);
