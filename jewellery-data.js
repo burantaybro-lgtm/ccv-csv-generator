@@ -191,6 +191,9 @@ function getValuedTitleParts(listing) {
     ? `${Number(caratMatch[1])}CT`
     : hallmarkCarats[hallmark] || "";
   let colour = "";
+  let metalLabel = "";
+  const isGold = /\bGOLD\b|\bYG\b|\bWG\b|\bRG\b/.test(metalText)
+    || Boolean(hallmarkCarats[hallmark]);
 
   if (/\bYG\b|YELLOW GOLD/.test(metalText)) {
     colour = "YG";
@@ -200,17 +203,56 @@ function getValuedTitleParts(listing) {
     colour = "RG";
   }
 
-  return { newRetailValue, carat, colour };
+  if (!isGold) {
+    if (/\bPLATINUM\b|\bPT\b/.test(metalText)) {
+      metalLabel = "Platinum";
+    } else if (/\bPALLADIUM\b|\bPD\b/.test(metalText)) {
+      metalLabel = "Palladium";
+    } else if (/\bSTERLING SILVER\b|\bSS\b/.test(metalText) || hallmark === "925") {
+      metalLabel = "Sterling Silver";
+    } else if (/\bFINE SILVER\b/.test(metalText) || hallmark === "999") {
+      metalLabel = "Fine Silver";
+    } else if (/\bSILVER\b/.test(metalText)) {
+      metalLabel = "Silver";
+    } else if (/\bTITANIUM\b|\bTI\b/.test(metalText)) {
+      metalLabel = "Titanium";
+    } else if (/\bSTAINLESS STEEL\b|\bST\/ST\b/.test(metalText)) {
+      metalLabel = "Stainless Steel";
+    } else if (/\bTUNGSTEN\b|\bTUNG\b/.test(metalText)) {
+      metalLabel = "Tungsten";
+    }
+  }
+
+  return {
+    newRetailValue,
+    isGold,
+    carat: isGold ? carat : "",
+    colour: isGold ? colour : "",
+    metalLabel
+  };
 }
 
 function buildValuedJewelleryTitle(listing) {
-  const { newRetailValue, carat, colour } = getValuedTitleParts(listing);
+  const {
+    newRetailValue,
+    isGold,
+    carat,
+    colour,
+    metalLabel
+  } = getValuedTitleParts(listing);
   const cleanTitle = String(listing?.title || "")
     .replace(/^\s*\$[\d,.]+\s*/i, "")
     .replace(/^\s*\d{1,2}\s*(?:CT|CARAT|K)\s+(?:YG|WG|RG)\b\s*/i, "")
+    .replace(
+      /^\s*(?:Platinum|Palladium|Sterling Silver|Fine Silver|Silver|Titanium|Stainless Steel|Tungsten)\b\s*/i,
+      ""
+    )
     .trim();
+  const titleMetal = isGold
+    ? [carat, colour].filter(Boolean).join(" ")
+    : metalLabel;
 
-  return [newRetailValue, carat, colour, cleanTitle]
+  return [newRetailValue, titleMetal, cleanTitle]
     .filter(Boolean)
     .join(" ");
 }

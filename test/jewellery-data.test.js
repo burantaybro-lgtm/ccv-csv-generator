@@ -125,8 +125,10 @@ test("builds a valued jewellery title from retail value, hallmark and colour", (
 
   assert.deepEqual(getValuedTitleParts(listing), {
     newRetailValue: "$5,600",
+    isGold: true,
     carat: "18CT",
-    colour: "YG"
+    colour: "YG",
+    metalLabel: ""
   });
   assert.equal(
     buildValuedJewelleryTitle(listing),
@@ -143,4 +145,37 @@ test("does not duplicate an existing valued jewellery title prefix", () => {
   });
 
   assert.equal(title, "$5,000 18CT YG Diamond Dress Ring");
+});
+
+test("uses the metal name instead of gold fields for valued platinum jewellery", () => {
+  const listing = {
+    title: "Diamond Solitaire Ring",
+    new_retail_price: "5000",
+    hallmark: "950",
+    metal: "Platinum"
+  };
+
+  assert.deepEqual(getValuedTitleParts(listing), {
+    newRetailValue: "$5,000",
+    isGold: false,
+    carat: "",
+    colour: "",
+    metalLabel: "Platinum"
+  });
+  assert.equal(
+    buildValuedJewelleryTitle(listing),
+    "$5,000 Platinum Diamond Solitaire Ring"
+  );
+});
+
+test("supports other non-gold metals in valued jewellery titles", () => {
+  assert.equal(
+    buildValuedJewelleryTitle({
+      title: "Sterling Silver Dress Ring",
+      new_retail_price: "1800",
+      hallmark: "925",
+      metal: "Sterling Silver"
+    }),
+    "$1,800 Sterling Silver Dress Ring"
+  );
 });

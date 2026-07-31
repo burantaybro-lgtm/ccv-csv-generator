@@ -451,12 +451,16 @@ function getListingReviewIssue(listing, stockRecord, photoType = "") {
     ].filter(([, value]) => !String(value || "").trim());
     const titleParts = getValuedTitleParts(listing);
 
-    if (!titleParts.carat) {
-      missingFields.push(["gold karat for title", ""]);
-    }
+    if (titleParts.isGold) {
+      if (!titleParts.carat) {
+        missingFields.push(["gold karat for title", ""]);
+      }
 
-    if (!titleParts.colour) {
-      missingFields.push(["gold colour for title", ""]);
+      if (!titleParts.colour) {
+        missingFields.push(["gold colour for title", ""]);
+      }
+    } else if (!titleParts.metalLabel) {
+      missingFields.push(["metal for title", ""]);
     }
 
     return missingFields.length
@@ -731,6 +735,9 @@ For valued jewellery:
 - new_retail_price is the "Est. Retail Value".
 - market_value is the "Fair Market Value".
 - hallmark is the value following "Stamped".
+- metal must contain the full valued metal and colour stated in the valuation,
+  for example "18 carat yellow gold", "platinum", "sterling silver", or
+  "palladium".
 - size is the item size stated in the valuation.
 - weight is the total item weight stated in the valuation.
 - new_retail_price should be the valuation retail price.
